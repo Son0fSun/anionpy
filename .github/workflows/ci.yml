@@ -1,0 +1,126 @@
+# CI for the anionpy repository.
+#
+# READ THIS BEFORE COPYING THIS FILE INTO THE PUBLIC REPO.
+#
+# The this workflow runs in the public repository (see
+# docs/PHASE-0-DECISIONS-2026-08-06.md), and that filter currently excludes
+# `tests/` and `tools/` as internal tooling. Three of the four jobs below run
+# out of those directories. So this workflow CANNOT run as-is in the public
+# repo -- it would fail on a missing path, not pass vacuously, which is the
+# better of the two failure modes but still wrong.
+#
+# That is an unresolved consequence of the export decision, not an oversight
+# here: a numpy-replacement published with no runnable test suite is not a
+# Someone has to decide whether the harness ships. Until they do, this file
+# stays in the private tree and the public repo has no CI. Do not "fix" this
+# by deleting the suite job -- that would turn a visible gap into a green
+# checkmark that proves nothing.
+#
+# Nothing below installs or contacts anything internal.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: cargo build --workspace
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --release
+      - run: cargo test --workspace --release
+
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: install build + test deps
+        run: |
+          python -m venv .venv
+          ./.venv/bin/pip install --upgrade pip
+          ./.venv/bin/pip install "maturin>=1.9,<2.0" "numpy>=2"
+
+      # A FAILED maturin build silently leaves any previously installed .so in
+      # place, so the suite would then measure a stale binary and pass. Assert
+      # on the installed marker rather than trusting the exit code alone.
+      - name: build and install the extension
+        run: |
+          set -o pipefail
+          ./.venv/bin/maturin develop --release 2>&1 | tee /tmp/build.log
+          grep -q "Installed anionpy" /tmp/build.log || {
+            echo "maturin did not report an install; the .so may be stale" >&2
+            exit 1
+          }
+
+      # Run from a neutral directory: from the repo root, sys.path[0] resolves
+      # the source tree's own `anionpy/` package instead of the installed one,
+      # and the suite would then test uncompiled Python rather than the extension.
+        run: |
+          cd /tmp
+          "$GITHUB_WORKSPACE/.venv/bin/python" \
+
+      # The suite has a known-failing set. This gate fails when that set GROWS,
+      # which is the regression we care about. It is not a claim that zero
+      # failures exist -- see CHANGELOG.md.
+      - name: assert no new failures
+        run: |
+          "$GITHUB_WORKSPACE/.venv/bin/python" - <<'PY'
+          import json, sys
+          # Measured 2026-08-06 at 471ef4c. Was 26 at c47ea54.
+          #
+          # READ BEFORE TREATING THE DROP AS PROGRESS: only ONE of those five
+          # items (scalar_comparison_unsupported_operand_gap) was fixed in
+          # code. The other four -- prod, nanprod, ndarray.prod, ndarray.sum --
+          # stopped failing because their corpora were scoped to exclude the
+          # float16 `axis_tuple_noncontig` shape family, a REAL and still
+          # reduce_axis_f16_narrow_wide. That scoping matches what sum/mean/
+          # var/std already do for the identical gap, and all four items
+          # remain WITHDRAWN in the coverage ledger rather than declared, so
+          # nothing was credited for it: coverage held at 670/3091 across the
+          # change. A dropping failure count with a flat ledger is the correct
+          # signature for scoping; a dropping count with a RISING ledger would
+          # have meant a divergence got hidden and paid for.
+          BASELINE = 21
+          r = json.load(open("/tmp/results.json"))
+          fails = sorted(k for k, v in r.items() if v.get("verdict") == "fail")
+          print(f"{len(r)} items / {len(fails)} failing (baseline {BASELINE})")
+          for f in fails:
+              print("  ", f)
+          if len(fails) > BASELINE:
+              sys.exit(f"REGRESSION: {len(fails)} failures exceeds baseline {BASELINE}")
+          if len(fails) < BASELINE:
+              print("Failures dropped below baseline -- lower BASELINE in this file "
+                    "in the same commit that earned it.")
+          PY
+
+      - name: coverage ledger
+        run: |
+          "$GITHUB_WORKSPACE/.venv/bin/python" \
+            "$GITHUB_WORKSPACE/tools/coverage.py" --tests /tmp/results.json
+
+  export-guard:
+    name: no internal identifiers in shippable files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      # Read-only. Exits 1 on a leak, 2 if the scanner fails its own self-check
+      # -- a checker that cannot detect a known-bad string has not passed.
+      - run: python tools/check_public_export.py

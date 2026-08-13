@@ -1,0 +1,36 @@
+[package]
+name = "ionp-ion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ionp-core = { path = "../ionp-core" }
+num-complex.workspace = true
+rayon.workspace = true
+rustfft.workspace = true
+half.workspace = true
+cblas = "0.5.0"
+lapack = "0.20.0"
+
+# BLAS/LAPACK backend is target-conditional: Accelerate on Apple targets
+# (macOS behaviour must stay bit-identical — this is the load-bearing
+# inference path), OpenBLAS everywhere else. See docs/PORTABILITY-LINUX-GCC.md.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+blas-src = { version = "0.14.0", default-features = false, features = ["accelerate"] }
+lapack-src = { version = "0.13.0", default-features = false, features = ["accelerate"] }
+
+[target.'cfg(not(target_vendor = "apple"))'.dependencies]
+blas-src = { version = "0.14.0", default-features = false, features = ["openblas"] }
+lapack-src = { version = "0.13.0", default-features = false, features = ["openblas"] }
+# Explicit, statically-linked OpenBLAS so the resulting cdylib needs no
+# LD_LIBRARY_PATH / rpath at runtime for `maturin develop` to "just work".
+# Feature-unifies with blas-src/lapack-src's own optional openblas-src pull.
+openblas-src = { version = "0.10", features = ["static"] }
+
+[lib]
+name = "ionp_ion"
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"

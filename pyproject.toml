@@ -1,0 +1,56 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "anionpy"
+version = "0.1.0"
+# OUTWARD-FACING METADATA. This string is published verbatim to any package
+# index and must never name internal components or architecture. The previous
+# value named three of them; see docs/OSS-IP-ASSESSMENT.md. Describe the
+# OUTCOME (a numpy-compatible array library with a native core), never the
+# method.
+description = "A NumPy-compatible array library with a native Rust core."
+requires-python = ">=3.14"
+dependencies = []
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
+
+# Both of these were blocked decisions and are now resolved by the project
+# owner: the license is MIT, and README.md is written (against the final name,
+# "anionpy" -- a pre-publication rename, nothing was indexed under the old one).
+#
+# PEP 639 expression + license-files, NOT a `License ::` classifier: setting
+# both is an error, and there is deliberately no license classifier above.
+#
+# Choosing MIT is NOT the same as being clear to publish. The LICENSE file
+# still names <<COPYRIGHT-HOLDER-PENDING>> instead of the legal entity that
+# owns the IP, and tools/check_public_export.py fails while it does. Do not
+# invent a holder to turn that check green.
+license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
+
+[project.optional-dependencies]
+# numpy is a TRUE OPTIONAL dependency at runtime (see ionp-py/src/errors.rs):
+# `import anionpy` succeeds with no numpy installed at all. This extra is for
+# callers who want numpy-interop (`np.asarray(anionpy_arr)`, catching anionpy's
+# errors via numpy's own public exception classes, etc). numpy remains a
+# build/test-time dependency regardless (see ionp-py/Cargo.toml's `numpy`
+# crate dep and run.py's differential harness), just not a runtime import
+# requirement.
+compat = ["numpy>=2"]
+
+[tool.maturin]
+manifest-path = "ionp-py/Cargo.toml"
+module-name = "anionpy._anionpy"
+python-source = "."

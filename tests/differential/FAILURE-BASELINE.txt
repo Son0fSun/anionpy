@@ -1,0 +1,91 @@
+# Differential-suite failure set, BY NAME. Durable baseline for non-regression checks.
+#
+# Why this file exists: #88's non-regression check could only compare a COUNT,
+# because the prior results JSON lived in /tmp and had been cleaned up. A count
+# is blind to a swap — one name leaving and another arriving reads as no change.
+# A baseline that lives in /tmp is not a baseline; it is a coincidence.
+#
+# Regenerate deliberately, never casually:
+#   flock /tmp/ionp-build.lock ./.venv/bin/python tests/differential/run.py --out /tmp/rNEW.json
+#   ./.venv/bin/python -c "import json;d=json.load(open('/tmp/rNEW.json'));print('\n'.join(sorted(k for k,v in d.items() if v['verdict']=='fail')))"
+# Any commit that changes this list must explain the delta in its message.
+#
+# Measured 33 failures @ 72242f9, ledger 51.491% (1571/3051, bit-exact 1517,
+# phantom 0, failing 0), macOS arm64 / numpy 2.5.1 / Accelerate.
+# NOTE: polynomial.laguerre.lagfromroots is the sole INTENTIONAL expected-fail.
+#
+# UPDATED 2026-08-13 (#86, measurement-only ticket -- corpus/comparator
+# widened, nothing repaired). +1 name: `divmod`, newly exposed by widening
+# `binary_corpus()`/`scalar_operands()` with denormal magnitudes and
+# explicit signed zeros -- see docs/TICKET-86-2026-08-13.md for the full
+# write-up and mechanism. All 33 prior names are UNCHANGED (same names,
+# still failing, nothing resolved) -- this is a pure addition, not a swap.
+# Measured 34 failures @ 03d2c06, ledger 51.459% (1570/3051, bit-exact 1516,
+# phantom 0, failing 1), macOS arm64 / numpy 2.5.1 / Accelerate.
+
+alias/nonaliased/__ipow__
+alias/self/__ipow__
+alias/view/__ipow__
+emath.power
+expm1
+finfo.__init__
+finfo.__new__
+float_power
+hypot
+iinfo.__init__
+iinfo.__new__
+isnat
+ldexp
+matrix.__setitem__
+memmap.__new__/unsupported_dtype
+memmap.__repr__
+min_scalar_type
+ndarray.__ipow__
+ndarray.__pow__
+ndarray.__rpow__
+ndarray.__rtruediv__
+order/ufunc/isnat
+out_axis/ufunc/isnat
+polynomial.chebyshev.chebfromroots
+polynomial.laguerre.lagfromroots
+polynomial.polynomial.polyfromroots
+polynomial.polynomial.polymul
+polynomial.polynomial.polypow
+pow
+power
+promote_types
+result_type
+stack
+
+# --- newly exposed by #86's corpus widening, 2026-08-13 ---
+divmod
+
+# --- Ticket #90a (longdouble/clongdouble), 2026-08-13 @ 7026d65 ---
+# +2 names: `longdouble_list_ctor`/`clongdouble_list_ctor` -- NOT
+# `longdouble`/`clongdouble` themselves (those are added to scalar_cases.py
+# and pass fully, 23/23 and 15/15 cases). These two are a narrow,
+# disclosed, deliberately-separated edge case this ticket's own tests
+# found while adding `anionpy.longdouble`/`anionpy.clongdouble`:
+# `anionpy.longdouble([1, 2])`/`anionpy.clongdouble([1, 2])` build an array
+# that matches real numpy on value/dtype.name/itemsize but not on
+# `repr()` -- real numpy's array repr prints an explicit
+# `", dtype=float64)"`/`", dtype=complex128)"` suffix for an array sourced
+# from `np.longdouble`/`np.clongdouble` (its dtype is the distinct
+# `'g'`/`'G'`-spelled one, not the plain default `'d'`/`'D'` one repr
+# compares against), while anionpy's array-building compat shim
+# (`build_array_for_dtype` in scalars.rs) has no way to tag an array with
+# that spelling -- `NdArray`/`PyArray` carry a bare `DType` enum, no
+# per-instance spelling tag at all (only `PyDType`, the scalar dtype
+# object, has one, from ticket #78). Giving arrays that same tag would be
+# the same out-of-scope "route dtype identity through a class/tag table
+# instead of a bare enum, project-wide" change already declined for the
+# `dtype('g')`-not-becoming-`LongDoubleDType` gap (see
+# `ionp-py/src/dtypes_module.rs`'s doc comment). Neither name is in
+# `tools/numpy_surface.json` (not a manifest surface item), so this can
+# never gate/phantom the ticket's actual 4 declared items
+# (`longdouble`/`clongdouble`/`dtypes.LongDoubleDType`/
+# `dtypes.CLongDoubleDType`, all declared "exact" in
+# `anionpy/_state/scalars.py`) -- kept here, visible and failing, so the
+# gap is not silently dropped.
+longdouble_list_ctor
+clongdouble_list_ctor

@@ -1,0 +1,1034 @@
+{
+  "abs": {
+    "max_ulp": 1.0,
+    "mechanism": "ulp",
+    "tolerant": true,
+    "verdict": "pass"
+  },
+  "absolute": {
+    "max_ulp": 1.0,
+    "mechanism": "ulp",
+    "tolerant": true,
+    "verdict": "pass"
+  },
+  "acos": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "acosh": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "add": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "arccos": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "arccosh": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "arcsin": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "arcsinh": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "arctan": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "arctan2": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "arctanh": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "array": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "asin": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "asinh": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "atan": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "atan2": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "atanh": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "bitwise_and": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "bitwise_count": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "bitwise_invert": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "bitwise_left_shift": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "bitwise_not": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "bitwise_or": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "bitwise_right_shift": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "bitwise_xor": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "cbrt": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "ceil": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "char.add": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "char.isalnum": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "char.isalpha": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "char.isdecimal": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "char.isdigit": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "char.islower": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "char.isnumeric": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "char.isspace": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "char.istitle": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "char.isupper": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "char.str_len": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "conj": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "conjugate": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "copysign": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "cos": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "cosh": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "deg2rad": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "degrees": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "divide": {
+    "max_ulp": 17.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "divmod": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "equal": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "exp": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "exp2": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "expm1": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "fabs": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "float_power": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "floor": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "floor_divide": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "fmax": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "fmin": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "fmod": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "frexp": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "gcd": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "greater": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "greater_equal": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "heaviside": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "hypot": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "invert": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "isfinite": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "isinf": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "isnan": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "isnat": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "lcm": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "ldexp": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "left_shift": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "less": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "less_equal": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "linalg.cholesky": {
+    "max_ulp": 8.0,
+    "mechanism": "epsilon",
+    "tolerant": true,
+    "verdict": "pass"
+  },
+  "linalg.cond": {
+    "max_ulp": 6.0,
+    "mechanism": "epsilon",
+    "tolerant": true,
+    "verdict": "pass"
+  },
+  "linalg.det": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "linalg.eig": {
+    "max_ulp": 4.368491638549381e+18,
+    "mechanism": "epsilon",
+    "tolerant": true,
+    "verdict": "pass"
+  },
+  "linalg.eigh": {
+    "max_ulp": 2251799813685248.0,
+    "mechanism": "epsilon",
+    "tolerant": true,
+    "verdict": "pass"
+  },
+  "linalg.eigvals": {
+    "max_ulp": 4.377498837804122e+18,
+    "mechanism": "epsilon",
+    "tolerant": true,
+    "verdict": "pass"
+  },
+  "linalg.eigvalsh": {
+    "max_ulp": 0.0,
+    "mechanism": "epsilon",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "linalg.inv": {
+    "max_ulp": 15.0,
+    "mechanism": "epsilon",
+    "tolerant": true,
+    "verdict": "pass"
+  },
+  "linalg.lstsq": {
+    "max_ulp": 1.3409463015576836e+16,
+    "mechanism": "epsilon",
+    "tolerant": true,
+    "verdict": "pass"
+  },
+  "linalg.matrix_power": {
+    "max_ulp": 1.0,
+    "mechanism": "epsilon",
+    "tolerant": true,
+    "verdict": "pass"
+  },
+  "linalg.matrix_rank": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "linalg.pinv": {
+    "max_ulp": 1.0,
+    "mechanism": "epsilon",
+    "tolerant": true,
+    "verdict": "pass"
+  },
+  "linalg.qr": {
+    "max_ulp": 0.0,
+    "mechanism": "epsilon",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "linalg.slogdet": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "linalg.solve": {
+    "max_ulp": 14.0,
+    "mechanism": "epsilon",
+    "tolerant": true,
+    "verdict": "pass"
+  },
+  "linalg.svd": {
+    "max_ulp": 0.0,
+    "mechanism": "epsilon",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "linalg.svdvals": {
+    "max_ulp": 2.0,
+    "mechanism": "epsilon",
+    "tolerant": true,
+    "verdict": "pass"
+  },
+  "linalg.trace": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "log": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "log10": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "log1p": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "log2": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "logaddexp": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "logaddexp2": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "logical_and": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "logical_not": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "logical_or": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "logical_xor": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "matmul": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "matvec": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "maximum": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "minimum": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "mod": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "modf": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "multiply": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.T": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.__add__": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.__array__": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.__getitem__": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.__len__": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.__mul__": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.__radd__": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.__repr__": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.__rmul__": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.astype": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.copy": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.dtype": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.ndim": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.reshape": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.shape": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.size": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "ndarray.strides": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "ndarray.transpose": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "negative": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "nextafter": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "not_equal": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "positive": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "pow": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "power": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "rad2deg": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "radians": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "reciprocal": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "remainder": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "right_shift": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "rint": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "sign": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "signbit": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "sin": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "sinh": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "spacing": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "sqrt": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "square": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.add": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.equal": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.greater": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.greater_equal": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.isalnum": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.isalpha": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.isdecimal": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.isdigit": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.islower": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.isnumeric": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.isspace": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.istitle": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.isupper": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.less": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.less_equal": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.not_equal": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "strings.str_len": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "subtract": {
+    "max_ulp": 0.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "pass"
+  },
+  "sum": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "tan": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "tanh": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "true_divide": {
+    "max_ulp": 17.0,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "trunc": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "vecdot": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  },
+  "vecmat": {
+    "max_ulp": null,
+    "mechanism": "none",
+    "tolerant": false,
+    "verdict": "fail"
+  }
+}

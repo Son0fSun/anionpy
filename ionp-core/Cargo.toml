@@ -1,0 +1,26 @@
+[package]
+name = "ionp-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+num-complex.workspace = true
+num-traits.workspace = true
+rayon.workspace = true
+half.workspace = true
+unicode-general-category = "1.1.0"
+# Already a pinned workspace dependency (see root Cargo.toml
+# [workspace.dependencies] and ionp-ion's own Cargo.toml, which
+# declared it before this task but never called into it) -- NOT a new
+# third-party crate for the workspace, just the first crate that actually
+# calls it. Used for the arbitrary-length (mixed-radix + Bluestein) complex
+# FFT core `fft.rs` needs; hand-rolling a from-scratch general Bluestein/
+# mixed-radix engine correctly (including the differential harness's own
+# arbitrary-n requirement) was judged higher-risk than reusing an already-
+# vendored, already-tested pure-Rust FFT crate with zero Python/numpy
+# involvement. Reported loudly per this task's crate-addition rule.
+rustfft.workspace = true
+
+[lib]
+name = "ionp_core"

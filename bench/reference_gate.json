@@ -1,0 +1,196 @@
+{
+  "_comment": "ACCEPTANCE GATE for the Rust Ion layer. Numbers measured on <host> (<internal-ip>) 2026-07-31 from the reference implementation at <reference-repo>, and independently reproduced by a second agent (441.4x vs 444.4x on the showcase case - run-to-run variance, not disagreement). The Rust port must clear the floor on the speedup column and MUST NOT EXCEED the correctness column. Nothing here was typed from memory.",
+  "source": {
+    "host": "<host> <internal-ip>",
+    "path": "<reference-repo>",
+    "loc": 5432,
+    "tests": "27 passed",
+    "language": "Python (algorithm reference only, NOT the product)"
+  },
+  "correctness_gate": {
+    "policy": "No timing number may be printed for an operator that has not first matched dense numpy to <1e-9. Adopted verbatim from the reference implementation. A speed number attached to a wrong answer is a lie.",
+    "threshold": 1e-9,
+    "reference_measured": {
+      "circulant":            {"matvec": 3.20e-14, "matmat": 1.07e-13},
+      "circulant@circulant":  {"matvec": 1.36e-12, "matmat": 3.18e-12},
+      "toeplitz":             {"matvec": 2.84e-14, "matmat": 1.14e-13},
+      "lowrank_r16":          {"matvec": 1.42e-13, "matmat": 4.12e-13},
+      "diagonal":             {"matvec": 0.0,      "matmat": 0.0}
+    }
+  },
+  "speedup_gate": {
+    "_note": "n=4096 matvec unless stated. Speedup vs numpy dense @ on the same machine.",
+    "_scheme": "Rewritten 2026-08-01 per reports/ion-gate-target-semantics-2026-08-01.md, which also carries the full argument for why this replaces the single-band scheme rather than just widening it. Each case below carries TWO independently-provenanced target kinds instead of one cross-hardware band: 'floor' (the reference implementation's ratio on <host>, kept as a hard lower bound our Rust port must never fall below -- a Rust port being slower than the Python original it reimplements is a genuine regression) and 'reproduction' (a [0.5x, 2.0x] band recorded ON THIS MACHINE FROM THIS IMPLEMENTATION by `bench --record-reproduction`, so a future run that halves our own speedup is still caught even though it can never be caught by comparing against <host>'s numbers). A case passes only if it clears its floor AND sits inside its reproduction band. Band-checking a Rust-on-M4/Accelerate measurement against a Python-on-<host> ratio was the category error being fixed here; reproduction.recorded=false means `bench --record-reproduction` has not been run since this schema was introduced -- the gate cannot band-check what has never been measured on this machine, and correctly refuses to pass until it has.",
+    "circulant_matvec_n4096": {
+      "floor": {
+        "speedup": 14.5,
+        "numpy_us": 597.1,
+        "ion_us": 41.2,
+        "provenance": {
+          "implementation": "Python (the reference implementation, algorithm source only)",
+          "host": "<host> <internal-ip>",
+          "blas": "unrecorded (<host>'s environment; not captured at authoring time)",
+          "numpy_version": "unrecorded (<host>'s environment; not captured at authoring time)",
+          "date": "2026-07-31"
+        }
+      },
+      "reproduction": {
+      "recorded": true,
+      "speedup": 62.44407516298096,
+      "numpy_us": 1954,
+      "ion_us": 31.291999999999998,
+      "band": {
+        "lo": 31.22203758149048,
+        "hi": 124.88815032596192,
+        "lo_mult": 0.5,
+        "hi_mult": 2
+      },
+      "provenance": {
+        "implementation": "Rust ionp-ion (this crate, this commit)",
+        "host": "Monday",
+        "blas": "Apple Accelerate (blas-src, accelerate feature; cblas_dgemm/cblas_dgemv)",
+        "numpy_version": "<repo-root>/.venv/bin/python3 v2.5.1",
+        "date": "2026-08-01"
+      }
+    }
+    },
+    "toeplitz_matvec_n4096": {
+      "floor": {
+        "speedup": 6.4,
+        "numpy_us": 605.4,
+        "ion_us": 93.9,
+        "provenance": {
+          "implementation": "Python (the reference implementation, algorithm source only)",
+          "host": "<host> <internal-ip>",
+          "blas": "unrecorded (<host>'s environment; not captured at authoring time)",
+          "numpy_version": "unrecorded (<host>'s environment; not captured at authoring time)",
+          "date": "2026-07-31"
+        }
+      },
+      "reproduction": {
+      "recorded": true,
+      "speedup": 31.21979282868526,
+      "numpy_us": 1959.042,
+      "ion_us": 62.74999999999999,
+      "band": {
+        "lo": 15.60989641434263,
+        "hi": 62.43958565737052,
+        "lo_mult": 0.5,
+        "hi_mult": 2
+      },
+      "provenance": {
+        "implementation": "Rust ionp-ion (this crate, this commit)",
+        "host": "Monday",
+        "blas": "Apple Accelerate (blas-src, accelerate feature; cblas_dgemm/cblas_dgemv)",
+        "numpy_version": "<repo-root>/.venv/bin/python3 v2.5.1",
+        "date": "2026-08-01"
+      }
+    }
+    },
+    "lowrank_r16_matvec_n4096": {
+      "floor": {
+        "speedup": 19.0,
+        "numpy_us": 587.6,
+        "ion_us": 30.9,
+        "provenance": {
+          "implementation": "Python (the reference implementation, algorithm source only)",
+          "host": "<host> <internal-ip>",
+          "blas": "unrecorded (<host>'s environment; not captured at authoring time)",
+          "numpy_version": "unrecorded (<host>'s environment; not captured at authoring time)",
+          "date": "2026-07-31"
+        }
+      },
+      "reproduction": {
+      "recorded": true,
+      "speedup": 28.41414484869092,
+      "numpy_us": 2005.5839999999998,
+      "ion_us": 70.584,
+      "band": {
+        "lo": 14.20707242434546,
+        "hi": 56.82828969738184,
+        "lo_mult": 0.5,
+        "hi_mult": 2
+      },
+      "provenance": {
+        "implementation": "Rust ionp-ion (this crate, this commit)",
+        "host": "Monday",
+        "blas": "Apple Accelerate (blas-src, accelerate feature; cblas_dgemm/cblas_dgemv)",
+        "numpy_version": "<repo-root>/.venv/bin/python3 v2.5.1",
+        "date": "2026-08-01"
+      }
+    }
+    },
+    "circulant_product_n2048": {
+      "_why": "dense forms A@B at O(n^3); Ion multiplies spectra elementwise + one ifft at O(n log n). The dense product is NEVER formed.",
+      "floor": {
+        "speedup": 444.4,
+        "numpy_ms": 21.03,
+        "ion_us": 47.3,
+        "reproduced_independently": 441.4,
+        "provenance": {
+          "implementation": "Python (the reference implementation, algorithm source only)",
+          "host": "<host> <internal-ip>",
+          "blas": "unrecorded (<host>'s environment; not captured at authoring time)",
+          "numpy_version": "unrecorded (<host>'s environment; not captured at authoring time)",
+          "date": "2026-07-31"
+        }
+      },
+      "reproduction": {
+      "recorded": true,
+      "speedup": 3694.230744697815,
+      "numpy_us": 46333.042,
+      "ion_us": 12.542,
+      "band": {
+        "lo": 1847.1153723489076,
+        "hi": 7388.46148939563,
+        "lo_mult": 0.5,
+        "hi_mult": 2
+      },
+      "provenance": {
+        "implementation": "Rust ionp-ion (this crate, this commit)",
+        "host": "Monday",
+        "blas": "Apple Accelerate (blas-src, accelerate feature; cblas_dgemm/cblas_dgemv)",
+        "numpy_version": "<repo-root>/.venv/bin/python3 v2.5.1",
+        "date": "2026-08-01"
+      }
+    }
+    }
+  },
+  "baseline_competitiveness_gate": {
+    "_comment": "Added 2026-08-01 per reports/ion-gate-baseline-audit-2026-08-01.md. Every speedup above is only meaningful if our Rust dense baseline (ionp-ion/src/baseline.rs) is itself competitive with what a numpy user would actually run -- otherwise the ratio is inflated by however slow our baseline is, not by anything Ion did. bench.rs shells out to the canonical numpy/BLAS reference (see 'source' block below) at RUN TIME, on the same op/dtype/n, and compares wall time to the Rust baseline it just measured. There is no committed numpy-timing number here on purpose: a frozen number would go stale on different hardware or after a numpy/BLAS upgrade and could certify a baseline that is no longer fair. See ionp-ion/src/numpy_ref.rs for the implementation and the fuller justification.",
+    "threshold_mult": 1.5,
+    "policy": "If rust_baseline_seconds / numpy_seconds > threshold_mult, the case is INFLATED_BASELINE: bench.rs must suppress the headline speedup ratio for that case entirely (not print a ratio derived from a baseline known to be unfair) and fail the overall gate. A numpy measurement that cannot be obtained (canonical interpreter missing, bad output, etc) is treated the same as INFLATED_BASELINE -- unverified competitiveness is not fair competitiveness. `bench --record-reproduction` additionally refuses to write a new reproduction band for any case whose baseline is not FAIR this run: recording a band from an inflated baseline would bake the inflation into the future gate.",
+    "canonical_interpreter": "<repo-root>/.venv/bin/python3",
+    "canonical_numpy_version_at_authoring": "2.5.1",
+    "audit_finding_same_machine_2026_08_01": {
+      "rust_dense_baseline_ms": 398.07,
+      "numpy_zgemm_complex128_ms": 191.88,
+      "numpy_dgemm_float64_ms": 50.71,
+      "note": "rust baseline was 2.07x slower than numpy BLAS on identical complex input, and the benchmark was additionally paying a 3.78x dtype tax by running Complex64 over real-valued standard_normal data. These are historical audit numbers for context only -- bench.rs re-measures both the baseline and the numpy comparator fresh on every run; nothing here is read by the gate at run time."
+    }
+  },
+  "dtype_honesty_gate": {
+    "_comment": "Added 2026-08-01 per reports/ion-gate-baseline-audit-2026-08-01.md. Test data in bench.rs is generated by SplitMix64::next_gaussian -- real-valued. The Rust dense baseline (ionp-ion/src/baseline.rs::dense_matvec/dense_matmul) operates on real f64 throughout, matching that data honestly: a real-valued benchmark must be timed against a real-valued BLAS comparator (numpy dgemv/dgemm), never a complex one, or the baseline pays a dtype tax the algorithm being measured never asked for. Ion's own operators are typed Complex64 internally (structured-operator algebra needs it in general), and that internal cost is Ion's to carry -- it is not charged to the baseline. This file records the DECISION, not a number: there is nothing here to regenerate."
+  },
+  "dispatch_gate": {
+    "_note": "n=2048. Detection is a ONE-TIME cost; break-even is in applications. This is the table my earlier falsification measured exactly one row of.",
+    "diagonal":     {"detect_ms": 1.84,  "per_app_speedup": 98.8, "breakeven_apps": 8},
+    "circulant":    {"detect_ms": 6.31,  "per_app_speedup": 8.4,  "breakeven_apps": 37},
+    "toeplitz":     {"detect_ms": 10.16, "per_app_speedup": 4.1,  "breakeven_apps": 77},
+    "lowrank_r16":  {"detect_ms": 13.37, "per_app_speedup": 8.8,  "breakeven_apps": 94},
+    "unstructured": {"detect_ms": 84.56, "per_app_speedup": 1.0,  "breakeven_apps": null,
+                     "why": "No structure to exploit. smart() returns a dense wrapper: never slower, never faster. THIS ROW is what GOAL-ion-array.md wrongly generalized to the whole premise."}
+  },
+  "honesty_gate": {
+    "must_remain_true": "On a genuinely incompressible dense matmul, no honest method beats BLAS. Measured in the reference implementation's frontier bench: Strassen-Winograd 0.71-0.93x (LOSES to Accelerate); randomized low-rank on a flat spectrum reaches 31.9x speed at 0.99 relative error, i.e. useless. 'Faster for all cases' is realised as: never slower than numpy, and faster wherever any speedup is possible.",
+    "detection_must_be_subcubic": "All detection tests must be O(n^2) or better. Diagonal/toeplitz/circulant are direct entry inspection; low-rank uses a randomized range finder at O(n^2 r). If detection ever becomes O(n^3) (e.g. a full SVD), break-even moves from ~8-94 applications to ~1000 and the library loses its reason to exist. This is the exact error that sank the previous attempt."
+  },
+  "inherited_gaps": {
+    "_note": "Open work carried forward from the reference. NOT credited as done.",
+    "composition_algebra": "Only Circulant@Circulant and LowRank@LowRank collapse to closed form. All other pairs fall back to a lazy ProductOperator - cheap at matvec time, never algebraically simplified.",
+    "closed_form_scope": "Closed form covers only the dephasing family (jump operators diagonal in H's eigenbasis). General non-commuting Lindbladian still needs brute-force O(n^4..n^6) - precisely the cost the closed form exists to avoid.",
+    "nika_povm_validity": "born_readout() never checks the completeness relation sum_i P_i = I. Hand it an invalid projector set and it returns confident numbers.",
+    "sparse_detection": "Named in detect.py's docstring, never implemented.",
+    "spectral_activations": "spectral_gelu / spectral_softmax are ifft->real->fft round trips with no asymptotic win. The reference says so in-source; keep that honesty."
+  }
+}

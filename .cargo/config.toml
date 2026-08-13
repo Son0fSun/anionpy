@@ -1,0 +1,12 @@
+# Plain `cargo build`/`cargo test` on ionp-py (a pyo3 `extension-module`
+# cdylib) fails to link on macOS: extension modules are deliberately NOT
+# linked against libpython (they get its symbols from the host Python
+# process at dlopen time), so the linker sees undefined Py_* symbols.
+# maturin handles this itself when it builds; this config makes plain
+# `cargo build --workspace` and `cargo test --workspace` work too.
+# See: https://pyo3.rs/main/building-and-distribution#macos
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-args=-undefined dynamic_lookup"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-args=-undefined dynamic_lookup"]
