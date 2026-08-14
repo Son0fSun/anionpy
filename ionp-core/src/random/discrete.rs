@@ -774,6 +774,64 @@ pub fn choice_no_replace_no_p(bg: &mut dyn BitGen64, pop_size: i64, size: i64, s
     }
 }
 
+/// `Generator.choice(..., replace=False, p=...)` transcribed from
+/// numpy 2.5.1 `_generator.pyx`: rejection loop that draws a batch of
+/// uniforms, searchsorted on a renormalized CDF after zeroing already
+/// chosen masses, then keeps first occurrences (`unique` + sort of
+/// first-index). RNG: `bitgen.next_f64()` per uniform, same as
+/// `Generator.random`.
+pub fn choice_no_replace_with_p(bg: &mut dyn BitGen64, p: &[f64], size: usize) -> Result<Vec<i64>, &'static str> {
+    if size == 0 {
+        return Ok(Vec::new());
+    }
+    let n = p.len();
+    let nonzero = p.iter().filter(|&&x| x > 0.0).count();
+    if nonzero < size {
+        return Err("Fewer non-zero entries in p than size");
+    }
+    let mut p = p.to_vec();
+    let mut found = vec![0i64; size];
+    let mut n_uniq = 0usize;
+    while n_uniq < size {
+        let need = size - n_uniq;
+        let mut uniforms = vec![0.0f64; need];
+        for u in &mut uniforms {
+            *u = bg.next_f64();
+        }
+        if n_uniq > 0 {
+            for k in 0..n_uniq {
+                let j = found[k] as usize;
+                if j < p.len() {
+                    p[j] = 0.0;
+                }
+            }
+        }
+        let mut cdf = vec![0.0f64; n];
+        let mut running = 0.0f64;
+        for i in 0..n {
+            running += p[i];
+            cdf[i] = running;
+        }
+        let last = *cdf.last().unwrap_or(&1.0);
+        if last != 0.0 {
+            for v in &mut cdf {
+                *v /= last;
+            }
+        }
+        let mut newv: Vec<i64> = uniforms
+            .iter()
+            .map(|&u| cdf.partition_point(|&c| c <= u) as i64)
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        newv.retain(|&v| seen.insert(v));
+        let take_n = newv.len().min(size - n_uniq);
+        found[n_uniq..n_uniq + take_n].copy_from_slice(&newv[..take_n]);
+        n_uniq += take_n;
+    }
+    Ok(found)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

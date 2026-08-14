@@ -1401,16 +1401,24 @@ impl PyGenerator {
             .cast::<PyArray>()
             .map_err(|_| PyTypeError::new_err("shuffle() requires an anionpy.ndarray as its in-place mutation target"))?;
         let mut pyref = bound.borrow_mut();
-        if pyref.inner.ndim() != 1 {
-            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-                "Generator.shuffle() on an array with ndim != 1 is not implemented; only whole 1-D shuffling is scoped in",
-            ));
+        let ndim = pyref.inner.ndim();
+        let ax = manip::normalize_axis(axis, ndim.max(1)).map_err(to_py_err)?;
+        if pyref.inner.size() == 0 {
+            return Ok(());
         }
-        // 1-D only, so the only legal `axis` values are 0/-1 -- this both
-        // validates that and matches numpy's own `axis` bounds-check
-        // message shape for a bad value.
-        manip::normalize_axis(axis, 1).map_err(to_py_err)?;
-        shuffle_buffer_masked(&mut self.bg, pyref.inner.buffer_mut());
+        if ndim <= 1 {
+            shuffle_buffer_masked(&mut self.bg, pyref.inner.buffer_mut());
+            return Ok(());
+        }
+        // ND: same Fisher-Yates as 1-D (`random_interval` via shuffle_masked
+        // on 0..n), then take along `axis`. Matches numpy's swapaxes +
+        // slice-swap RNG consumption.
+        let n = pyref.inner.shape()[ax];
+        let mut idx: Vec<i64> = (0..n as i64).collect();
+        discrete::shuffle_masked(&mut self.bg, &mut idx);
+        let idx_arr = NdArray::from_buffer(Buffer::I64(idx), vec![n], Order::C).map_err(to_py_err)?;
+        let out = manip::take(&pyref.inner, &idx_arr, Some(ax), manip::ClipMode::Raise).map_err(to_py_err)?;
+        pyref.inner = out;
         Ok(())
     }
 
@@ -1432,18 +1440,19 @@ impl PyGenerator {
             return Py::new(py, PyArray { inner })?.into_py_any(py);
         }
         let arr = extract_or_ingest_ndarray(x)?;
-        if arr.ndim() != 1 {
-            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-                "Generator.permutation() on an array with ndim != 1 is not implemented; only 1-D permutation is scoped in",
-            ));
+        let ax = manip::normalize_axis(axis, arr.ndim().max(1)).map_err(to_py_err)?;
+        if arr.ndim() <= 1 {
+            let mut copy = arr.to_contiguous_order("C").map_err(to_py_err)?;
+            shuffle_buffer_masked(&mut self.bg, copy.buffer_mut());
+            return Py::new(py, PyArray { inner: copy })?.into_py_any(py);
         }
-        manip::normalize_axis(axis, 1).map_err(to_py_err)?;
-        // `to_contiguous_order` always gathers into a FRESH, uniquely-owned
-        // buffer (`array.rs`'s `gather_by_perm`), never aliasing `arr`'s own
-        // storage -- exactly the "copy, then shuffle in place" numpy does.
-        let mut copy = arr.to_contiguous_order("C").map_err(to_py_err)?;
-        shuffle_buffer_masked(&mut self.bg, copy.buffer_mut());
-        Py::new(py, PyArray { inner: copy })?.into_py_any(py)
+        // numpy: shuffle an index vector, then fancy-index along axis.
+        let n = arr.shape()[ax];
+        let mut idx: Vec<i64> = (0..n as i64).collect();
+        discrete::shuffle_masked(&mut self.bg, &mut idx);
+        let idx_arr = NdArray::from_buffer(Buffer::I64(idx), vec![n], Order::C).map_err(to_py_err)?;
+        let out = manip::take(&arr, &idx_arr, Some(ax), manip::ClipMode::Raise).map_err(to_py_err)?;
+        Py::new(py, PyArray { inner: out })?.into_py_any(py)
     }
 
     /// `Generator.permuted(x, axis=None, out=None)`, scoped to
@@ -1617,12 +1626,12 @@ impl PyGenerator {
                     "Cannot take a larger sample than population when replace is False",
                 ));
             }
-            if p_vec.is_some() {
-                return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-                    "Generator.choice(replace=False, p=...) is not implemented; see the family doc comment above 'shuffle' for why this path is deliberately declined",
-                ));
+            if let Some(ref pv) = p_vec {
+                discrete::choice_no_replace_with_p(&mut self.bg, pv, n_draws)
+                    .map_err(PyValueError::new_err)?
+            } else {
+                discrete::choice_no_replace_no_p(&mut self.bg, pop_size, total_size, shuffle)
             }
-            discrete::choice_no_replace_no_p(&mut self.bg, pop_size, total_size, shuffle)
         };
 
         let idx_shape: Vec<usize> = if is_scalar { vec![] } else { out_shape.clone() };

@@ -985,6 +985,8 @@ EXPLODED_CLASS_SPECS["random.Generator.shuffle"] = ItemSpec(
         ("floats", (42, [0.5, 1.5, 2.5, 3.5, 4.5]), {}),
         ("strings", (42, ["a", "bb", "ccc", "dddd"]), {}),
         ("axis_neg1_is_axis0_for_1d", (42, list(range(10))), {"axis": -1}),
+        ("nd2_axis0", (0, [list(range(4)), list(range(4, 8)), list(range(8, 12))]), {}),
+        ("nd2_axis1", (1, [list(range(4)), list(range(4, 8)), list(range(8, 12))]), {"axis": 1}),
     ],
     numpy_adapter=_shuffle_np, ionp_adapter=_shuffle_ionp,
     atol=0.0, rtol=0.0,
@@ -1018,6 +1020,8 @@ EXPLODED_CLASS_SPECS["random.Generator.permutation"] = ItemSpec(
         ("array_equiv_10", (42, list(range(10))), {}),
         ("array_seed7", (7, list(range(6))), {}),
         ("array_floats", (42, [0.5, 1.5, 2.5, 3.5, 4.5]), {}),
+        ("nd2_axis0", (2, [list(range(4)), list(range(4, 8)), list(range(8, 12))]), {}),
+        ("nd2_axis1", (2, [list(range(4)), list(range(4, 8)), list(range(8, 12))]), {"axis": 1}),
     ],
     numpy_adapter=_permutation_np, ionp_adapter=_permutation_ionp,
     atol=0.0, rtol=0.0,
@@ -1064,7 +1068,7 @@ EXPLODED_CLASS_SPECS["random.Generator.permuted"] = ItemSpec(
 # provenance (plain int vs. 1-D array, default int64 vs. explicit int32
 # dtype, string dtype) and `p` varies edge shape (exact zero entry, a sum
 # pulled to just inside the `atol` tolerance boundary) per point 3.
-# `replace=False, p=given` is deliberately ABSENT from this corpus (see
+# `replace=False, p=given` is now IN the corpus (see
 # `ionp-py/src/random.rs`'s doc comment on that branch): it raises
 # `NotImplementedError` there, which IS this pass's declaration for that
 # cell, not a placeholder for a differential case that would only ever
@@ -1134,6 +1138,9 @@ EXPLODED_CLASS_SPECS["random.Generator.choice"] = ItemSpec(
         ("replace_false_size_gt_pop", (5, 5), {"size": 10, "replace": False}),
         ("p_length_mismatch", (5, 5), {"p": [0.5, 0.5]}),
         ("p_contains_negative", (5, 5), {"p": [-0.1, 0.3, 0.3, 0.3, 0.2]}),
+        ("replace_f_p_given", (42, 5), {"size": 3, "replace": False, "p": [0.1, 0.0, 0.3, 0.6, 0.0]}),
+        ("replace_f_p_given_size5", (7, 6), {"size": 4, "replace": False, "p": [0.05, 0.15, 0.2, 0.2, 0.2, 0.2]}),
+        ("replace_f_p_too_few_nonzero", (5, 5), {"size": 3, "replace": False, "p": [0.5, 0.5, 0.0, 0.0, 0.0]}),
     ],
     numpy_adapter=_choice_np, ionp_adapter=_choice_ionp,
     atol=0.0, rtol=0.0,

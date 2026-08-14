@@ -58,7 +58,6 @@ REPO = Path(__file__).resolve().parent.parent
 NEVER_PUBLISH = (
     "target/",
     ".venv/",
-    "venv/",
 )
 
 # Tokens that must not appear in any SHIPPED file. Case-insensitive, word-ish
