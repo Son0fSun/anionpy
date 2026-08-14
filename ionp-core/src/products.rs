@@ -254,20 +254,31 @@ pub fn tensordot(a: &NdArray, b: &NdArray, axes_a: &[usize], axes_b: &[usize]) -
     out2.reshape(&out_shape)
 }
 
-/// `np.cross(a, b)` for the 3-component case (the overwhelmingly common
-/// one; 2-component `cross` returns the scalar z-component only and is
-/// handled by the same formula restricted to that one output component).
-/// Broadcasts a and b's leading dimensions (all axes except `axis`, which
-/// must have length 2 or 3) the same way numpy does, then computes the
-/// determinant-formula cross product componentwise via existing
-/// elementwise multiply/subtract ufuncs.
+/// `np.cross(a, b)`. Broadcasts a and b's leading dimensions (all axes
+/// except `axis`, which must have length exactly 3) the same way numpy
+/// does, then computes the determinant-formula cross product componentwise
+/// via existing elementwise multiply/subtract ufuncs.
+///
+/// NOTE (2026-08-13, live-measured against numpy 2.5.1, corrected after the
+/// differential suite caught it): older numpy accepted 2-component vectors
+/// too (returning just the scalar z-component, or padding the missing
+/// component with 0 for a 2-vs-3 mix) -- this crate's FIRST implementation
+/// matched that older contract and FAILED the differential corpus, because
+/// current numpy has since removed 2-D cross-product support entirely and
+/// unconditionally raises `ValueError: Both input arrays must be (arrays
+/// of) 3-dimensional vectors, but they are {na} and {nb} dimensional
+/// instead.` for ANY axis length other than 3, on either operand. Matching
+/// numpy's OWN present-tense behavior, not a remembered older one, is the
+/// whole point of the differential contract -- fixed to require exactly 3
+/// and reproduce that exact message.
 pub fn cross(a: &NdArray, b: &NdArray, axis_a: usize, axis_b: usize, axis_c: usize) -> Result<NdArray, IonpError> {
     let na = a.shape()[axis_a];
     let nb = b.shape()[axis_b];
-    if !(2..=3).contains(&na) || !(2..=3).contains(&nb) {
-        return Err(IonpError::Value(
-            "incompatible dimensions for cross product (dimension must be 2 or 3)".to_string(),
-        ));
+    if na != 3 || nb != 3 {
+        return Err(IonpError::Value(format!(
+            "Both input arrays must be (arrays of) 3-dimensional vectors, but they are {} and {} dimensional instead.",
+            na, nb
+        )));
     }
     let take = |arr: &NdArray, axis: usize, idx: usize| -> Result<NdArray, IonpError> {
         let slices: Vec<crate::array::SliceItem> = (0..arr.ndim())
@@ -283,41 +294,17 @@ pub fn cross(a: &NdArray, b: &NdArray, axis_a: usize, axis_b: usize, axis_c: usi
     };
     let a0 = take(a, axis_a, 0)?;
     let a1 = take(a, axis_a, 1)?;
-    let a2 = if na == 3 { Some(take(a, axis_a, 2)?) } else { None };
+    let a2 = take(a, axis_a, 2)?;
     let b0 = take(b, axis_b, 0)?;
     let b1 = take(b, axis_b, 1)?;
-    let b2 = if nb == 3 { Some(take(b, axis_b, 2)?) } else { None };
+    let b2 = take(b, axis_b, 2)?;
 
     let mul = |x: &NdArray, y: &NdArray| ufunc::binary_op(BinaryOp::Multiply, x, y);
     let sub = |x: &NdArray, y: &NdArray| ufunc::binary_op(BinaryOp::Subtract, x, y);
-    let neg = |x: &NdArray| ufunc::unary_op(crate::ufunc::UnaryOp::Negative, x);
 
-    let cp0; // x component
-    let cp1; // y component
-    let cp2; // z component
-    match (&a2, &b2) {
-        (Some(a2), Some(b2)) => {
-            cp0 = sub(&mul(&a1, b2)?, &mul(a2, &b1)?)?;
-            cp1 = sub(&mul(a2, &b0)?, &mul(&a0, b2)?)?;
-            cp2 = sub(&mul(&a0, &b1)?, &mul(&a1, &b0)?)?;
-        }
-        (Some(a2), None) => {
-            // a is 3-component, b is 2-component (b2 treated as 0).
-            cp0 = neg(&mul(a2, &b1)?)?;
-            cp1 = mul(a2, &b0)?;
-            cp2 = sub(&mul(&a0, &b1)?, &mul(&a1, &b0)?)?;
-        }
-        (None, Some(b2)) => {
-            // a is 2-component (a2 treated as 0), b is 3-component.
-            cp0 = mul(&a1, b2)?;
-            cp1 = neg(&mul(&a0, b2)?)?;
-            cp2 = sub(&mul(&a0, &b1)?, &mul(&a1, &b0)?)?;
-        }
-        (None, None) => {
-            // Both 2-component: numpy returns only the scalar z component.
-            return sub(&mul(&a0, &b1)?, &mul(&a1, &b0)?);
-        }
-    }
+    let cp0 = sub(&mul(&a1, &b2)?, &mul(&a2, &b1)?)?;
+    let cp1 = sub(&mul(&a2, &b0)?, &mul(&a0, &b2)?)?;
+    let cp2 = sub(&mul(&a0, &b1)?, &mul(&a1, &b0)?)?;
     // Stack the three components back along axis_c.
     let parts = [&cp0, &cp1, &cp2];
     let expanded: Vec<NdArray> = parts

@@ -23,8 +23,9 @@
 //!     draws do not).
 //!
 //! NOT implemented here (see the task's final report for the honest
-//! breakdown): MT19937, Philox, SFC64, legacy RandomState, and every
-//! distribution beyond the direct uniform-double/bounded-integer paths
+//! breakdown): MT19937, Philox (measured 2026-08-13, deferred -- see
+//! `docs`/task report, not attempted this pass), legacy RandomState, and
+//! every distribution beyond the direct uniform-double/bounded-integer paths
 //! (`random`, `integers`, `bytes`). Depth over breadth, per the task
 //! brief -- a bit-exact PCG64/PCG64DXSM + SeedSequence + the `Generator`
 //! surface that sits directly on `next_uint64`/`next_uint32` beats a
@@ -36,10 +37,12 @@ pub mod distributions;
 mod logfactorial;
 pub mod pcg64;
 pub mod seed_sequence;
+pub mod sfc64;
 mod ziggurat_tables;
 
 pub use pcg64::{Pcg64, Pcg64Dxsm};
 pub use seed_sequence::SeedSequence;
+pub use sfc64::Sfc64;
 
 /// Shared interface every numpy-compatible bit generator implements.
 /// `next_uint32` MUST cache the unused half of a `next_uint64` draw

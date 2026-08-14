@@ -6,13 +6,6 @@ A NumPy-compatible array library with a native Rust core.
 replacement in production. Read the coverage table below before the feature
 list — there isn't a feature list.**
 
-
-## Repository scope
-
-This is a **standalone public tree**. See `docs/PUBLIC-SCOPE.md` for what is
-included. Development history from any private parent workspace is **not**
-part of this repository.
-
 ## What this is
 
 `anionpy` implements the NumPy API — the same names, the same signatures, the
@@ -132,9 +125,13 @@ A percentage does not tell you which 57% is absent, so:
 
   All twelve compute correct values to within an ULP or two. They are simply
   not claimed as exact, because that is what "exact" means here.
-- **No pickling.** `anionpy.ndarray` does not implement the pickle protocol at
-  all, so nothing containing one can be serialized — this blocks
-  `multiprocessing`, `joblib`, and any disk cache.
+- **Pickling works for `ndarray` values** (`pickle.dumps`/`loads` round-trip
+  shape, dtype, and data). The pickle format is anionpy-native, not
+  numpy's `_reconstruct` stream.
+- **`memoryview` works** for non-empty real/bool arrays and empty 1-D
+  (typed PEP 688 export of a C-contiguous copy). Complex and empty N-D
+  fall back to `__array__` for `np.asarray`; `memoryview` raises there.
+  This is a copy, not a live alias of the internal buffer.
 - **Array printing** does not reproduce NumPy's summarization rules.
 - Assorted per-item behavioural divergences are catalogued in the development
   tree rather than hidden. Where `anionpy` knowingly differs from NumPy, it is

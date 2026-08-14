@@ -23,6 +23,7 @@ use ionp_core::{Buffer, DType, IonpError, NdArray, Order, ScalarKind, SliceItem}
 use ionp_core::weak_target_dtype;
 
 mod array_protocol;
+mod pickle_buf;
 mod chebyshev;
 mod creation;
 mod dtypeinfo;
@@ -2337,10 +2338,10 @@ pub(crate) fn dtype_name_to_dtype(name: &str) -> PyResult<DType> {
     // tolerates the space and accepts it as `|S5`, this does not -- not
     // one of this task's required spellings (`'S5'`/`'<U12'`/`'|S3'`/bare
     // `str`/`bytes`), so not chased.
-    if name == "str" {
+    if name == "str" || name == "str_" {
         return Ok(DType::U(0));
     }
-    if name == "bytes" {
+    if name == "bytes" || name == "bytes_" {
         return Ok(DType::S(0));
     }
     if let Some(rest) = name.strip_prefix('S') {
@@ -10452,6 +10453,7 @@ fn _anionpy(m: &Bound<'_, PyModule>) -> PyResult<()> {
     dtypes_module::register(m.py(), m)?;
     ndarray_attrs::register(m.py(), m)?;
     io_ops::register(m.py(), m)?;
+    pickle_buf::register(m.py(), m)?;
     products_py::register(m.py(), m)?;
 
     Ok(())

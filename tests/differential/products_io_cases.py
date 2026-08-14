@@ -24,18 +24,31 @@ representable as an ordinary `ItemSpec` (there is no numpy value to
 `kind="binary"`-compare against; the assertion IS "the file anionpy wrote
 loads correctly", which is what `kind="custom"` with a hand-written
 adapter is for). What IS captured here, permanently, as ledger-visible
-regression protection: that `save`+`load` and `savez`(`_compressed`)+`load`
-round-trip through anionpy's OWN save/load pair correctly across dtype/
-shape/order variations, using anionpy's `.tobytes()`/`.tolist()` as the
-comparison surface (both sides literally the same call, by construction --
-this is checking "does the round trip preserve the array", not "does
-anionpy match numpy", which the differential harness's normal numpy-vs-
-ionp comparison isn't shaped for here).
+regression protection: that `save`+`load` and `savez`+`load` round-trip
+through anionpy's OWN save/load pair correctly across dtype/shape/order
+variations, using anionpy's `.tobytes()`/`.tolist()` as the comparison
+surface (both sides literally the same call, by construction -- this is
+checking "does the round trip preserve the array", not "does anionpy
+match numpy", which the differential harness's normal numpy-vs-ionp
+comparison isn't shaped for here).
+
+`savez_compressed` is the ONE exception to the same-implementation shape
+described above, added later in this same task after a same-implementation
+corpus was shown (by the coordinator, then reproduced independently) to be
+structurally blind to a real defect: values round-tripped fine but the
+archive never actually got smaller. Its adapters below (`_npzc_numpy`/
+`_npzc_ionp`) each use their OWN implementation's real writer end to end
+(real `np.savez_compressed` vs real `anionpy.savez_compressed`) and compare
+both the round-tripped values AND a compression-effectiveness signal, so a
+regression in either is corpus-visible. See the comment directly above
+`_npzc_numpy` for the measured numbers and reasoning.
 """
 from __future__ import annotations
 
 import os
 import tempfile
+import warnings
+import zipfile
 
 import _bootstrap  # noqa: F401
 
@@ -59,9 +72,19 @@ def cross_cases():
         cases.append((f"rand3_{i}", (a, b), {}))
     cases.append(("axis_last_default", (rng.standard_normal((4, 3)), rng.standard_normal((4, 3))), {}))
     cases.append(("int_exact", (np.array([1, 0, 0]), np.array([0, 1, 0])), {}))
-    cases.append(("two_component", (np.array([1.0, 2.0]), np.array([3.0, 4.0])), {}))
-    cases.append(("mixed_3_vs_2", (np.array([1.0, 2.0, 3.0]), np.array([4.0, 5.0])), {}))
-    cases.append(("mixed_2_vs_3", (np.array([1.0, 2.0]), np.array([3.0, 4.0, 5.0])), {}))
+    # numpy 2.5.1 has REMOVED 2-D cross-product support entirely (verified
+    # live: `np.cross([1.,2.],[3.,4.])` now unconditionally raises
+    # `ValueError: Both input arrays must be (arrays of) 3-dimensional
+    # vectors, but they are 2 and 2 dimensional instead.`, for any axis
+    # length != 3 on EITHER operand -- this crate's first `cross`
+    # implementation still accepted 2-component vectors, matching an OLDER
+    # numpy contract, and this exact corpus is what caught it (see
+    # `ionp-core/src/products.rs::cross`'s doc comment for the fix). These
+    # three cases are the negative control that keeps that regression from
+    # coming back.
+    cases.append(("two_component_raises", (np.array([1.0, 2.0]), np.array([3.0, 4.0])), {}))
+    cases.append(("mixed_3_vs_2_raises", (np.array([1.0, 2.0, 3.0]), np.array([4.0, 5.0])), {}))
+    cases.append(("mixed_2_vs_3_raises", (np.array([1.0, 2.0]), np.array([3.0, 4.0, 5.0])), {}))
     return cases
 
 
@@ -172,14 +195,6 @@ def _npz_ionp(arrs):
     return _npz_roundtrip(arrs, compressed=False)
 
 
-def _npzc_numpy(arrs):
-    return _npz_roundtrip(arrs, compressed=True)
-
-
-def _npzc_ionp(arrs):
-    return _npz_roundtrip(arrs, compressed=True)
-
-
 def npz_cases():
     return [
         ("two_keys", ({"x": np.arange(6, dtype=np.float64).reshape(2, 3), "y": np.arange(4, dtype=np.int64)},), {}),
@@ -193,6 +208,66 @@ PRODUCTS_IO_SPECS["savez"] = ItemSpec(
     numpy_adapter=_npz_numpy, ionp_adapter=_npz_ionp,
     atol=0.0, rtol=0.0, scalar_like=True,
 )
+
+
+# `savez_compressed` gets a STRICTER, genuinely cross-implementation check
+# than plain `savez` above, for a reason found live during this task's own
+# review: an earlier version of this corpus checked ONLY that values
+# round-tripped through anionpy's own writer+reader, the same
+# same-implementation shape `save`/`load` above use. That is exactly the
+# kind of corpus this project's own sharpest prior lesson warns about --
+# it can pass 100% while the one thing `savez_compressed` exists to do
+# (make the file smaller than `savez`'s plain output) silently does not
+# happen, because nothing in the assertion ever looked at size. Measured
+# directly (`zipfile.ZipFile(...).infolist()`, 100-element float64 array):
+#   ours:  compress_type=8 (DEFLATE header, correctly labelled), compress_size=933, file_size=928  (LARGER)
+#   numpy: compress_type=8 (DEFLATE),                            compress_size=255, file_size=928  (smaller, as intended)
+# `ionp-core/src/format.rs::deflate`'s encoder emits RFC-1951 "stored"
+# (uncompressed) blocks only -- a valid DEFLATE stream, correctly
+# decodable (values ARE still exactly right, see the values half of this
+# same tuple-comparison below), but achieving no real compression. See
+# `docs/TICKET-deflate-real-compressor.md` for the follow-up. Every call
+# to `anionpy.savez_compressed` also now raises a `UserWarning` naming
+# this gap (`ionp-py/src/io_ops.rs`), so it is visible at the call site,
+# not just in this corpus and a ledger comment.
+#
+# Each adapter below returns `(values, compressed_smaller_than_uncompressed)`
+# using ITS OWN implementation's real writer for both halves (real numpy
+# for `numpy_adapter`, real anionpy for `ionp_adapter` -- no shared
+# same-implementation shortcut this time), so a mismatch on the second
+# element is what makes this item fail rather than silently pass.
+
+def _npzc_numpy(arrs):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "a.npz")
+        np.savez_compressed(path, **arrs)
+        with zipfile.ZipFile(path) as z:
+            shrinks = all(i.compress_size < i.file_size for i in z.infolist() if i.file_size > 0)
+        back = np.load(path)
+        values = tuple(sorted((k, back[k].tolist(), str(back[k].dtype)) for k in arrs))
+        return (values, shrinks)
+
+
+def _npzc_ionp(arrs):
+    import anionpy
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "a.npz")
+        ins = {k: anionpy.array(v.tolist(), dtype=str(v.dtype)) for k, v in arrs.items()}
+        with warnings.catch_warnings():
+            # The UserWarning this call now raises (see module doc above)
+            # is itself asserted elsewhere (io_ops.rs's own doctest-style
+            # comment/manual check) -- silenced here only so it doesn't
+            # get misclassified as a test failure by the harness's warning
+            # capture, which is unrelated to what THIS item is checking.
+            warnings.simplefilter("ignore")
+            anionpy.savez_compressed(path, **ins)
+        with zipfile.ZipFile(path) as z:
+            shrinks = all(i.compress_size < i.file_size for i in z.infolist() if i.file_size > 0)
+        back = anionpy.load(path)
+        values = tuple(sorted((k, back[k].tolist(), str(back[k].dtype)) for k in arrs))
+        return (values, shrinks)
+
+
 PRODUCTS_IO_SPECS["savez_compressed"] = ItemSpec(
     name="savez_compressed", kind="custom", custom_cases=npz_cases,
     numpy_adapter=_npzc_numpy, ionp_adapter=_npzc_ionp,

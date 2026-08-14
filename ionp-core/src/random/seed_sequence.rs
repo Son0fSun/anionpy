@@ -57,9 +57,24 @@ fn mix_entropy(pool_size: usize, entropy_array: &[u32]) -> Vec<u32> {
         }
     }
 
+    // BUG FIX (2026-08-13, this session, found via an SFC64-corpus seed
+    // >2**128, which is the first case in this repo's history to push
+    // entropy past the 4-word pool and actually run this loop): numpy's
+    // `hashmix(entropy_array[i_src], hash_const)` is called INSIDE the
+    // `i_dst` inner loop, not once per `i_src` -- `hashmix` mutates
+    // `hash_const` and returns a DIFFERENT value on every call even for
+    // the same input word, so each of the `len(mixer)` inner iterations
+    // must get its own fresh `hashmix` call. The previous version hoisted
+    // the `hashmix` call outside the inner loop and reused one value for
+    // all `i_dst`, silently wrong only when `entropy_array.len() >
+    // mixer.len()` (i.e. seeds needing more than 4 uint32 words, roughly
+    // seeds >= 2**128) -- every previously-committed SeedSequence/PCG64/
+    // PCG64DXSM test used a single-word (small int) seed and never
+    // reached this branch. Verified against real numpy 2.5.1 directly:
+    // `SeedSequence(2**130+7).generate_state(4, dtype=np.uint64)`.
     for i_src in mixer.len()..entropy_array.len() {
-        let hashed = hashmix(entropy_array[i_src], &mut hash_const);
         for i_dst in 0..mixer.len() {
+            let hashed = hashmix(entropy_array[i_src], &mut hash_const);
             mixer[i_dst] = mix(mixer[i_dst], hashed);
         }
     }
@@ -158,5 +173,27 @@ mod tests {
         let seq = SeedSequence::new(&[42], &[], 4);
         let state32 = seq.generate_state_u32(4);
         assert_eq!(state32, vec![3444837047, 2669555309, 2046530742, 3581440988]);
+    }
+
+    // Regression test for the mix_entropy "remaining entropy" loop bug
+    // (2026-08-13, this session): entropy words for seed `2**130 + 7`
+    // (`_int_to_uint32_array(2**130+7)` == `[7, 0, 0, 0, 4]`, 5 words --
+    // one MORE than the default pool_size=4, so this is the first case in
+    // this crate's history to actually execute mix_entropy's third loop).
+    // Verified against real numpy 2.5.1 directly:
+    //   np.random.SeedSequence(2**130+7).generate_state(4)
+    //     -> [1956387801, 4266865393, 498201352, 1035958608]
+    //   np.random.SeedSequence(2**130+7).generate_state(2, dtype=np.uint64)
+    //     -> [18326047321325575129, 4449408341867885320]
+    // Before the fix (hashmix hoisted outside the i_dst loop instead of
+    // called fresh per i_dst), this produced a DIFFERENT, wrong pool.
+    #[test]
+    fn seed_sequence_entropy_beyond_pool_matches_numpy() {
+        let seq = SeedSequence::new(&[7, 0, 0, 0, 4], &[], 4);
+        let state32 = seq.generate_state_u32(4);
+        assert_eq!(state32, vec![1956387801, 4266865393, 498201352, 1035958608]);
+
+        let state64 = seq.generate_state_u64(2);
+        assert_eq!(state64, vec![18326047321325575129, 4449408341867885320]);
     }
 }

@@ -3994,3 +3994,36 @@ if _object_dtype_collisions:
         f"existing item"
     )
 REGISTRY.update(OBJECT_DTYPE_SPECS)
+
+from pickle_cases import PICKLE_SPECS  # noqa: E402
+_pickle_collisions = set(PICKLE_SPECS) & set(REGISTRY)
+if _pickle_collisions:
+    raise AssertionError(f'pickle_cases.py collisions: {sorted(_pickle_collisions)}')
+REGISTRY.update(PICKLE_SPECS)
+
+# Import-time invariant, same idiom and same reason as
+# _require_varargs_form_if_numpy_supports_it above: run UNCONDITIONALLY on
+# import so `run.py` enforces it too, not only pytest.
+#
+# This one guards declarations rather than cases: no bit-generator class may
+# be declared "exact" in RANDOM_STATE while its public surface is narrower
+# than numpy's. It exists because `random.SFC64` was declared exact at
+# 17b7bc3 with 1 of numpy's 8 public attributes, and the differential suite
+# passed -- the suite grades the methods a corpus exercises, and has no
+# opinion about the ones nobody wrote a case for.
+#
+# Wiring matters more than authorship here. The guard shipped as a pytest
+# module, and the routine declaration workflow is `run.py`, not pytest -- a
+# guard that only fires under a command nobody runs on the path where the
+# mistake is made is one step from decorative. Hence this line.
+from test_bitgen_surface import (  # noqa: E402
+    test_no_bitgen_class_is_declared_exact_with_an_incomplete_surface
+    as _require_declared_bitgens_match_numpys_surface,
+)
+_require_declared_bitgens_match_numpys_surface()
+
+from buffer_cases import BUFFER_SPECS  # noqa: E402
+_buffer_collisions = set(BUFFER_SPECS) & set(REGISTRY)
+if _buffer_collisions:
+    raise AssertionError(f'buffer_cases.py collisions: {sorted(_buffer_collisions)}')
+REGISTRY.update(BUFFER_SPECS)

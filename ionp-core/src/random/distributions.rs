@@ -237,6 +237,78 @@ pub fn beta(bg: &mut dyn BitGen64, a: f64, b: f64) -> f64 {
     }
 }
 
+/// Threshold numpy uses to pick `dirichlet`'s small-alpha (stick-breaking)
+/// path over the standard (gamma-normalization) path: `alpha.max() < 0.1`.
+/// Public so the PyO3 layer (`ionp-py/src/random.rs`, which computes
+/// `use_small_alpha` once per call before the draw loop) shares the same
+/// literal rather than re-declaring `0.1` independently.
+pub const DIRICHLET_SMALL_ALPHA_THRESHOLD: f64 = 0.1;
+
+/// `Generator.dirichlet`'s per-draw body (transcribed from
+/// `_generator.pyx`'s `dirichlet`, the `while i < totsize` loop body,
+/// NOT the array-shape/broadcast plumbing around it -- that lives in
+/// `ionp-py/src/random.rs`). Writes one length-`k` sample into `out`
+/// (`out.len() == alpha.len() == k`).
+///
+/// numpy picks one of two algorithms PER CALL based on `alpha.iter().max()
+/// < 0.1` (checked ONCE outside the sample loop in numpy, since `alpha` is
+/// fixed across all `totsize` draws of one `dirichlet()` call -- so this
+/// takes `use_small_alpha` as a precomputed bool rather than recomputing
+/// the max every draw, matching numpy's actual control flow, not just its
+/// per-sample math):
+///   - small-alpha (stick-breaking via `beta`): avoids the 0/0 -> NaN that
+///     the standard path can hit when every drawn gamma is 0 (possible
+///     whenever all of `alpha` is < 1).
+///   - standard (unit-normalize a vector of independent `standard_gamma`
+///     draws).
+/// Caller must ensure `alpha.iter().all(|&a| a >= 0.0)` (numpy's own
+/// `alpha < 0` check, via `np.any(np.less(alpha_arr, 0))` -- NOT
+/// `CONS_POSITIVE`, zero is allowed here unlike `beta`/`standard_gamma`'s
+/// own scalar constraints).
+pub fn dirichlet_sample(bg: &mut dyn BitGen64, alpha: &[f64], use_small_alpha: bool, out: &mut [f64]) {
+    let k = alpha.len();
+    debug_assert_eq!(out.len(), k);
+    if use_small_alpha {
+        // alpha_csum[j] = sum(alpha[j..]), right-to-left cumulative sum.
+        let mut alpha_csum = vec![0.0f64; k];
+        let mut csum = 0.0;
+        for j in (0..k).rev() {
+            csum += alpha[j];
+            alpha_csum[j] = csum;
+        }
+        if csum > 0.0 {
+            let mut acc = 1.0;
+            for j in 0..k.saturating_sub(1) {
+                let v = beta(bg, alpha[j], alpha_csum[j + 1]);
+                out[j] = acc * v;
+                acc *= 1.0 - v;
+                if alpha_csum[j + 1] == 0.0 {
+                    // v must be 1, so acc is now 0. numpy's C-level `break`
+                    // here exits ONLY the `for j` loop -- the trailing
+                    // `val_data[i + k - 1] = acc` still runs (matched
+                    // below, outside this `for`), leaving entries strictly
+                    // between `j` and `k-1` at their zero-initialized
+                    // value (caller must have zeroed `out`).
+                    break;
+                }
+            }
+            out[k - 1] = acc;
+        }
+        // csum == 0.0: every alpha is 0, `out` stays all-zero (caller must
+        // have zero-initialized it, matching numpy's `np.zeros(shape)`).
+    } else {
+        let mut acc = 0.0;
+        for j in 0..k {
+            out[j] = standard_gamma(bg, alpha[j]);
+            acc += out[j];
+        }
+        let invacc = 1.0 / acc;
+        for j in 0..k {
+            out[j] *= invacc;
+        }
+    }
+}
+
 /// `random_chisquare`: `2.0 * random_standard_gamma(df / 2.0)`. Caller
 /// must ensure `df > 0.0` (`CONS_POSITIVE`).
 pub fn chisquare(bg: &mut dyn BitGen64, df: f64) -> f64 {
@@ -870,5 +942,76 @@ mod tests {
             got,
             vec![1.6039971246646807, 0.351979088871238, 0.5050218011845795, 4.281564392349691, 0.44253582044002177]
         );
+    }
+
+    // np.random.default_rng(42).dirichlet([2.0, 3.0, 5.0], 3) (all alpha
+    // >= 0.1 -> standard gamma-normalization path) ->
+    // [[0.18795090692457098, 0.3674401449176678, 0.44460894815776125],
+    //  [0.1518747085022099, 0.40398994546391204, 0.44413534603387805],
+    //  [0.1877632401978632, 0.26534082814541293, 0.5468959316567238]]
+    #[test]
+    fn dirichlet_standard_path_seed42() {
+        let mut bg = pcg64(42);
+        let alpha = [2.0, 3.0, 5.0];
+        let use_small_alpha = alpha.iter().cloned().fold(f64::MIN, f64::max) < DIRICHLET_SMALL_ALPHA_THRESHOLD;
+        assert!(!use_small_alpha);
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            let mut row = vec![0.0; 3];
+            dirichlet_sample(&mut bg, &alpha, use_small_alpha, &mut row);
+            got.push(row);
+        }
+        assert_eq!(
+            got,
+            vec![
+                vec![0.18795090692457098, 0.3674401449176678, 0.44460894815776125],
+                vec![0.1518747085022099, 0.40398994546391204, 0.44413534603387805],
+                vec![0.1877632401978632, 0.26534082814541293, 0.5468959316567238],
+            ]
+        );
+    }
+
+    // np.random.default_rng(42).dirichlet([0.01, 0.02, 0.03], 3) (all
+    // alpha < 0.1 -> small-alpha stick-breaking-via-beta path) ->
+    // [[0.00010585197502286317, 0.9876708497500182, 0.012223298274958884],
+    //  [4.064534259855809e-103, 0.003600667615154035, 0.996399332384846],
+    //  [4.8734681923146074e-83, 3.613127420443142e-21, 1.0]]
+    #[test]
+    fn dirichlet_small_alpha_path_seed42() {
+        let mut bg = pcg64(42);
+        let alpha = [0.01, 0.02, 0.03];
+        let use_small_alpha = alpha.iter().cloned().fold(f64::MIN, f64::max) < DIRICHLET_SMALL_ALPHA_THRESHOLD;
+        assert!(use_small_alpha);
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            let mut row = vec![0.0; 3];
+            dirichlet_sample(&mut bg, &alpha, use_small_alpha, &mut row);
+            got.push(row);
+        }
+        assert_eq!(
+            got,
+            vec![
+                vec![0.00010585197502286317, 0.9876708497500182, 0.012223298274958884],
+                vec![4.064534259855809e-103, 0.003600667615154035, 0.996399332384846],
+                vec![4.8734681923146074e-83, 3.613127420443142e-21, 1.0],
+            ]
+        );
+    }
+
+    // np.random.default_rng(42).dirichlet([5.0], 3) -> [[1.0], [1.0], [1.0]]
+    // (k=1: the small-alpha-vs-standard split is irrelevant, alpha.max()=5.0
+    // uses the standard path, `standard_gamma(bg, 5.0) / acc` is always 1.0
+    // since there's only one term).
+    #[test]
+    fn dirichlet_k1_seed42() {
+        let mut bg = pcg64(42);
+        let alpha = [5.0];
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            let mut row = vec![0.0; 1];
+            dirichlet_sample(&mut bg, &alpha, false, &mut row);
+            got.push(row);
+        }
+        assert_eq!(got, vec![vec![1.0], vec![1.0], vec![1.0]]);
     }
 }

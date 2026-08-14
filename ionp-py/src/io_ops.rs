@@ -175,6 +175,19 @@ fn savez(py: Python<'_>, file: &Bound<'_, PyAny>, args: Vec<Bound<'_, PyAny>>, k
     savez_impl(py, file, args, kwargs, false)
 }
 
+/// `np.savez_compressed`: values round-trip exactly (both `anionpy.load`
+/// and real `np.load` read the archive back byte-for-byte correct), but
+/// the DEFLATE encoder backing this (`ionp_core::format::deflate`) is
+/// hand-rolled and, per its own module doc comment, emits RFC-1951
+/// "stored" (uncompressed) blocks only -- a valid DEFLATE stream that
+/// achieves essentially no size reduction (measured: a 100-element
+/// float64 array's compressed entry is 933 bytes here vs 255 bytes from
+/// real numpy's genuine Huffman/LZ77 encoder). The single thing this
+/// function's name promises -- that the output is smaller than the
+/// uncompressed equivalent -- does not currently hold, so every call
+/// warns rather than leaving that gap discoverable only by inspecting
+/// file sizes after the fact or reading a ledger comment nobody sees at
+/// the call site.
 #[pyfunction]
 #[pyo3(signature = (file, *args, **kwargs))]
 fn savez_compressed(
@@ -183,6 +196,15 @@ fn savez_compressed(
     args: Vec<Bound<'_, PyAny>>,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<()> {
+    let msg = std::ffi::CString::new(
+        "anionpy.savez_compressed: values are exact, but the DEFLATE encoder \
+         backing this call emits uncompressed ('stored') blocks only -- the \
+         output is a valid .npz archive but is NOT actually compressed \
+         (typically larger than savez's plain output for the same arrays). \
+         See docs/TICKET-deflate-real-compressor.md."
+    ).expect("no interior NUL");
+    let warn_cat = py.get_type::<pyo3::exceptions::PyUserWarning>();
+    PyErr::warn(py, &warn_cat, msg.as_c_str(), 1)?;
     savez_impl(py, file, args, kwargs, true)
 }
 

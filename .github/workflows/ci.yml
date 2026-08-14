@@ -1,8 +1,8 @@
-# CI for the anionpy repository.
+# CI for the PRIVATE development tree.
 #
 # READ THIS BEFORE COPYING THIS FILE INTO THE PUBLIC REPO.
 #
-# The this workflow runs in the public repository (see
+# The public repo is produced by an export filter (see
 # docs/PHASE-0-DECISIONS-2026-08-06.md), and that filter currently excludes
 # `tests/` and `tools/` as internal tooling. Three of the four jobs below run
 # out of those directories. So this workflow CANNOT run as-is in the public
@@ -11,6 +11,7 @@
 #
 # That is an unresolved consequence of the export decision, not an oversight
 # here: a numpy-replacement published with no runnable test suite is not a
+# credible artifact, and the differential harness IS the correctness evidence.
 # Someone has to decide whether the harness ships. Until they do, this file
 # stays in the private tree and the public repo has no CI. Do not "fix" this
 # by deleting the suite job -- that would turn a visible gap into a green
@@ -40,6 +41,8 @@ jobs:
       - run: cargo build --workspace --release
       - run: cargo test --workspace --release
 
+  differential:
+    name: differential suite vs numpy
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -70,9 +73,11 @@ jobs:
       # Run from a neutral directory: from the repo root, sys.path[0] resolves
       # the source tree's own `anionpy/` package instead of the installed one,
       # and the suite would then test uncompiled Python rather than the extension.
+      - name: run the differential suite
         run: |
           cd /tmp
           "$GITHUB_WORKSPACE/.venv/bin/python" \
+            "$GITHUB_WORKSPACE/tests/differential/run.py" --out /tmp/results.json
 
       # The suite has a known-failing set. This gate fails when that set GROWS,
       # which is the regression we care about. It is not a claim that zero
@@ -88,6 +93,7 @@ jobs:
           # code. The other four -- prod, nanprod, ndarray.prod, ndarray.sum --
           # stopped failing because their corpora were scoped to exclude the
           # float16 `axis_tuple_noncontig` shape family, a REAL and still
+          # UNFIXED divergence disclosed in KNOWN-DIFFERENCES.md and in
           # reduce_axis_f16_narrow_wide. That scoping matches what sum/mean/
           # var/std already do for the identical gap, and all four items
           # remain WITHDRAWN in the coverage ledger rather than declared, so

@@ -2507,4 +2507,103 @@ NDARRAY_STATE = {
     # and are NOT, on this same gap and others; see the 2026-08-04 block in
     # _state/toplevel.py under "take". Do not treat their declarations as
     # evidence that the bar has been met.
+
+    # array-protocol dunders on `ndarray` -- NEW 2026-08-13 (Monday,
+    # array-protocol-dunders ticket). All nine had ZERO existence on
+    # `anionpy.ndarray` before this task (`hasattr` was `False` for all of
+    # them; confirmed by grep across the whole tree). New file
+    # `ionp-py/src/array_protocol.rs` (a second `#[pymethods] impl PyArray`
+    # block, pyo3 `multiple-pymethods` feature, same pattern as
+    # `ndarray_attrs.rs`) adds them; new file
+    # `tests/differential/array_protocol_cases.py` (`kind="custom"`, per-item
+    # adapters -- none of the nine fit `unary`/`binary_op`/`method`) covers
+    # them, merged into `registry.py`'s `REGISTRY`. All eleven registered
+    # items (nine dunders plus two added `.mixed_dispatch` variants, see
+    # below) pass: `ndarray.__array_finalize__` 3/3,
+    # `ndarray.__array_wrap__` 2/2, `ndarray.__array_priority__` 1/1,
+    # `ndarray.__array_namespace__` 1/1, `ndarray.__array_function__` 2/2,
+    # `ndarray.__array_function__.mixed_dispatch` 2/2,
+    # `ndarray.__array_ufunc__` 2/2, `ndarray.__array_ufunc__.mixed_dispatch`
+    # 2/2, `ndarray.__dlpack_device__` 2/2, `ndarray.__array_interface__`
+    # 19/19, `ndarray.__array_struct__` 19/19.
+    #
+    # CRITICAL DEFECT FOUND AND FIXED DURING THIS TASK, not by inspection but
+    # by the coordinator's explicit direction to test `__array_ufunc__` "with
+    # a real numpy array on both the left and the right side of the
+    # operator, not just ours on the left": the first-draft
+    # `__array_function__`/`__array_ufunc__` implementations forwarded
+    # directly to the callable numpy handed them (`func(*args, **kwargs)` /
+    # `ufunc(*inputs, **kwargs)`). When that callable is a REAL numpy public
+    # dispatcher (`np.sum`, `np.add`, ...) reached because one operand is an
+    # `anionpy.ndarray` that numpy cannot handle natively, calling it back
+    # re-triggers numpy's OWN dispatch machinery on the same operand,
+    # re-invoking this method -- infinite recursion / stack overflow.
+    # Confirmed live pre-fix: `np.sum(anionpy_array)`,
+    # `np.add(numpy_array, anionpy_array)`, and
+    # `np.add(anionpy_array, numpy_array)` all raised `RecursionError: stack
+    # overflow`. FIXED by resolving the equivalent callable from anionpy's
+    # OWN namespace by name (`func.__name__`/`ufunc.__name__` looked up on
+    # `anionpy`) and calling THAT instead -- anionpy's own functions/`Ufunc`
+    # objects never re-enter numpy's Python-level dispatch, so this
+    # terminates; an unresolvable name returns `NotImplemented` per protocol
+    # convention. `__array_ufunc__` additionally coerces any non-`PyArray`
+    # input (a real numpy operand, a Python scalar) via `anionpy.array(...)`
+    # before dispatching. The original direct-call adapters in
+    # `array_protocol_cases.py` (anionpy's own ufunc/function objects on both
+    # sides) never exercised this path and so never caught it -- two new
+    # `.mixed_dispatch` registry items were added specifically to route
+    # through numpy's REAL dispatcher (`np.sum(ia)`, `np.add(a_np, ib)`,
+    # `np.add(ia, b_np)`) so the registered corpus itself would catch a
+    # regression here, not just an ad hoc probe.
+    #
+    # `__array_prepare__` is correctly ABSENT: removed from numpy in the 2.x
+    # line (`hasattr(numpy.ndarray, "__array_prepare__")` is `False` on numpy
+    # 2.5.1) -- not ours to implement.
+    #
+    # `__buffer__` and full `__dlpack__` (distinct from `__dlpack_device__`,
+    # which IS declared below) are deliberately NOT implemented, reported not
+    # built per this ticket's "report genuine impossibilities, move on"
+    # instruction: `__buffer__` needs real PEP 688 `tp_as_buffer` C-level FFI
+    # wiring in PyO3 that overlaps another agent's in-flight "no views" work;
+    # full `__dlpack__` needs a named ("dltensor") `PyCapsule` wrapping a
+    # `DLManagedTensor` struct with a producer-side rename-on-consume
+    # deleter contract -- substantially more machinery than every other item
+    # here.
+    #
+    # KNOWN GAP, not declared here: `__array_interface__`/`__array_struct__`
+    # raise `NotImplementedError` for `S`/`U` (string) dtypes. Real numpy
+    # DOES expose both for `S`/`U` (fixed-width, still a flat buffer in its
+    # own storage); anionpy's `Buffer::S`/`Buffer::U` are ragged (one heap
+    # allocation per element, confirmed in `ionp-core/src/buffer.rs`), so
+    # there is no flat pointer to expose. This is a genuine, measured,
+    # ASYMMETRIC gap (numpy succeeds, anionpy correctly refuses rather than
+    # fabricate a pointer) and is deliberately NOT a registered differential
+    # item (it would either always fail, polluting the baseline with a
+    # "failure" that is actually a documented correct refusal, or require an
+    # `exception_equivalences` workaround this task's rules forbid).
+    #
+    # `matrix`/`memmap`/`MaskedArray` do NOT automatically gain any of these:
+    # confirmed by reading their source, all three are Python COMPOSITION
+    # wrappers around a `self._data: anionpy.ndarray`, not real subclasses,
+    # with no `__getattr__` delegation -- new `PyArray` methods do not
+    # propagate to them. `recarray` does not exist anywhere in this codebase
+    # at all.
+    "ndarray.__array_finalize__": "exact",
+    "ndarray.__array_wrap__": "exact",
+    "ndarray.__array_priority__": "exact",
+    "ndarray.__array_namespace__": "exact",
+    "ndarray.__array_function__": "exact",
+    "ndarray.__array_ufunc__": "exact",
+    "ndarray.__dlpack_device__": "exact",
+    "ndarray.__array_interface__": "exact",
+    "ndarray.__array_struct__": "exact",
+    # 2026-08-13: PEP 688 typed memoryview for non-empty real/bool
+    # (and empty 1-D). Complex / empty N-D raise so asarray uses __array__.
+    "ndarray.__buffer__": "exact",
+    # 2026-08-13: pickle protocol (values survive dumps/loads).
+    "ndarray.__reduce__": "exact",
+    "ndarray.__reduce_ex__": "exact",
+    "ndarray.__getstate__": "exact",
+    "ndarray.__setstate__": "exact",
 }
+

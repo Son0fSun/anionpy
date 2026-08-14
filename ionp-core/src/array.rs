@@ -180,6 +180,18 @@ impl NdArray {
         &self.buffer
     }
 
+    /// Mutable, copy-on-write access to the underlying `Buffer`, for callers
+    /// (e.g. `ionp-py`'s `shuffle`) that need true in-place mutation and
+    /// live outside this crate, so cannot reach the `pub(crate) buffer`
+    /// field or call `Arc::make_mut` on it directly themselves. Mirrors the
+    /// exact `Arc::make_mut(&mut a.buffer)` pattern already used internally
+    /// in `manip.rs`: if this `NdArray`'s buffer `Arc` is uniquely owned,
+    /// mutates in place; if shared with another alias, clones first so the
+    /// alias is left untouched (standard COW).
+    pub fn buffer_mut(&mut self) -> &mut Buffer {
+        Arc::make_mut(&mut self.buffer)
+    }
+
     pub fn is_c_contiguous(&self) -> bool {
         // numpy treats every size-0 array as trivially both C- and
         // F-contiguous regardless of its strides (verified:

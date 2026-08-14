@@ -260,6 +260,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ionp-eren"
+version = "0.1.0"
+dependencies = [
+ "ionp-core",
+ "ionp-ion",
+ "num-complex",
+ "rayon",
+]
+
+[[package]]
 name = "ionp-ion"
 version = "0.1.0"
 dependencies = [
@@ -271,6 +281,17 @@ dependencies = [
  "lapack-src",
  "num-complex",
  "openblas-src",
+ "rayon",
+ "rustfft",
+]
+
+[[package]]
+name = "ionp-nika"
+version = "0.1.0"
+dependencies = [
+ "ionp-core",
+ "ionp-ion",
+ "num-complex",
  "rayon",
  "rustfft",
 ]

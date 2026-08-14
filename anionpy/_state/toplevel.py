@@ -5845,6 +5845,39 @@ TOPLEVEL_STATE = {
     # gap inside a declared item is still a false declaration, this is left
     # UNDECLARED even though it is loudly correct (raises rather than lies)
     # for the one input class it cannot represent.
+    #
+    # ===== UPDATE 2026-08-13 (Monday), TICKET #38 =====
+    #
+    # The specific gap above -- a bare Python `int` outside i64/u64 range --
+    # is CLOSED, not by adding a real object dtype, but by a marker: `dtype(
+    # 'O')` now exists as a `PyDType` whose `spelling` field is set to the
+    # sentinel `Some('O')` (`inner` is left at a meaningless placeholder,
+    # `DType::Bool`, that every object-dtype-aware getter/dunder ignores --
+    # see `ionp-py/src/lib.rs`'s `PyDType::new` doc comment for the full
+    # design and why `DType` itself gained no real `Object` variant:
+    # `ufunc.rs`/`matmul.rs` match it exhaustively and are owned by other
+    # agents). `min_scalar_type(-9223372036854775809)` and `min_scalar_type
+    # (18446744073709551616)` now return that marker instead of raising
+    # `OverflowError` -- verified live: `np.dtype(anionpy.min_scalar_type(v))
+    # == np.dtype('O')` is `True` for both, and the full 39-value sweep in
+    # `dtypeinfo_cases.py`'s `min_scalar_type_cases` (previously failing on
+    # exactly these 2/39) now passes 39/39.
+    #
+    # min_scalar_type is STILL left UNDECLARED here, deliberately: the
+    # marker is real for INTROSPECTION (`.name`/`.kind`/`.char`/`.itemsize`/
+    # `.num`/`.str`/`.byteorder`/`.hasobject`/`repr`/`str`/`__eq__`/
+    # `__hash__`/safe-cast ordering, all verified live against real numpy
+    # 2.5.1 -- see `tests/differential/object_dtype_cases.py`), but nothing
+    # can actually STORE an object-dtype value: `anionpy.zeros(3,
+    # dtype=object)`/`anionpy.array([...], dtype=object)`/`anionpy.array(...)
+    # .astype(object)` all still raise `TypeError`, unchanged by this ticket
+    # (see `object_dtype_cases.py`'s `object_storage_gap_cases`, an
+    # intentional visible FAIL, not a silent omission). A value returned by
+    # a "declared" item that cannot then be used the way real numpy's
+    # equivalent value can is still a false declaration under this file's
+    # own standing rule -- so `min_scalar_type` stays undeclared, now for a
+    # narrower, more honest reason than before: the gap moved from "the
+    # dtype is unrepresentable" to "the dtype is representable but inert."
 
     # finfo: implemented and value-correct (all fields -- eps, epsneg, max,
     # min, tiny, smallest_normal, smallest_subnormal, resolution, precision,
@@ -7236,7 +7269,11 @@ TOPLEVEL_STATE = {
     # here). No arithmetic anywhere in this cluster -- it is a pure byte
     # layout problem (the `.npy` header dict + raw buffer bytes, the `.npz`
     # ZIP container, optionally DEFLATE-compressed), so "exact" here means
-    # literally byte-identical files/values, not "close."
+    # literally byte-identical VALUES (per-entry payload bytes / array
+    # contents, `.tobytes()`-equivalent), not "close" -- see the `savez`
+    # scoping note below for a precise statement of what "byte-identical"
+    # does and does NOT cover for the `.npz` container specifically, added
+    # after the coordinator asked for it to be stated rather than assumed.
     #
     # EVIDENCE (`/private/tmp/npy_roundtrip.py`, run against live numpy
     # 2.5.1, both directions, not just anionpy-writes-anionpy-reads which
@@ -7248,10 +7285,35 @@ TOPLEVEL_STATE = {
     #   (b) real `np.save()` -> `anionpy.load()`: same, reverse direction;
     #   (c) an F-order `.npy` file written by real numpy loads correctly
     #       (fortran_order header flag honoured, not silently ignored);
-    #   (d) `.npz` and `.npz` DEFLATE-compressed (`savez_compressed`),
-    #       multi-key archives, both directions, keyword-named and
-    #       positional (`arr_0`/`arr_1`) entries.
+    #   (d) `.npz` (`savez`) multi-key archives, both directions, keyword-
+    #       named and positional (`arr_0`/`arr_1`) entries. (`savez_compressed`
+    #       moved to its own "NOT DECLARED" note below, 2026-08-13, after a
+    #       real gap was found in it -- see that note.)
     # All checks printed OK, 0 failures.
+    #
+    # `savez` (uncompressed) whole-archive byte-identity, STATED EXPLICITLY
+    # rather than assumed from the above (the coordinator asked for this
+    # directly, 2026-08-13, in the same review that caught the
+    # `savez_compressed` gap below): per-entry PAYLOAD bytes and array
+    # VALUES are genuinely byte-identical between anionpy's writer and real
+    # numpy's -- confirmed live (`zipfile.ZipFile`, comparing each entry's
+    # raw decompressed bytes directly, `data_n == data_a` true for every
+    # entry checked) -- but the FULL RAW `.npz` FILE is NOT byte-identical
+    # between the two writers. Cause, isolated live: ZIP entry metadata --
+    # `create_system` (numpy=3/Unix, anionpy=0/MS-DOS), `create_version`/
+    # `extract_version` (numpy=45, anionpy=20), `external_attr` (numpy sets
+    # Unix permission bits in the upper 16 bits, anionpy leaves 0) -- which
+    # shifts each entry's `header_offset` and therefore every byte from the
+    # first entry header onward (first raw divergence at archive byte
+    # offset 4). `compress_type`, `file_size`, `compress_size`, and
+    # `date_time` (DOS-epoch 1980-01-01) match exactly per entry; this is
+    # purely writer-identity metadata, not a data or timestamp defect, and
+    # both implementations read both archives correctly regardless. Not
+    # declaring a SEPARATE "whole-archive-identical" property here since
+    # nothing in this codebase's differential corpus or public API surface
+    # claims or depends on raw-file byte-identity for `savez` -- only
+    # value/shape/dtype round-trip fidelity, which IS exact and IS what
+    # `"savez": "exact"` below asserts.
     #
     # `frombuffer` verified separately: reinterprets a `bytes`/buffer-
     # protocol object's raw memory per `dtype`/`count`/`offset`, matches
@@ -7274,11 +7336,55 @@ TOPLEVEL_STATE = {
     # `encoding=`/`max_header_size=` are accepted for signature
     # compatibility and unused (no object dtype exists in this crate for
     # pickle to matter, and there is no memory-mapping backend).
+    #
     "save": "exact",
     "load": "exact",
     "savez": "exact",
-    "savez_compressed": "exact",
     "frombuffer": "exact",
+    # savez_compressed: NOT DECLARED (revoked 2026-08-13; was briefly
+    # declared "exact" earlier in this same task, then challenged by the
+    # coordinator and reverted -- see below). Implemented
+    # (`ionp-py/src/io_ops.rs::savez_compressed`) and functionally usable
+    # -- values round-trip exactly correct in every case tested, and both
+    # anionpy's own reader and real numpy's `np.load` decode the archive
+    # correctly -- but the DEFLATE encoder backing it
+    # (`ionp-core/src/format.rs::deflate`) is hand-rolled and, per its own
+    # pre-existing module doc comment (not introduced or worsened this
+    # task), always emits RFC-1951 "stored" (uncompressed) blocks: a
+    # byte-for-byte valid DEFLATE stream with essentially zero actual
+    # compression. Measured independently by both the coordinator and this
+    # task (100-element float64 array, single-key `.npz`):
+    #   ours:  file 1041 bytes, compress_type=8 (DEFLATE), compress_size=933, file_size=928  (compress_size > file_size -- net EXPANSION)
+    #   numpy: file  383 bytes, compress_type=8 (DEFLATE), compress_size=255, file_size=928  (genuine ~3.6x shrink)
+    # The reasoning for NOT DECLARED, not "exact with a caveat": this
+    # project's sharpest prior lesson (see the memory-order postmortems
+    # elsewhere in this file) is that a corpus which only checks VALUES can
+    # stay 100% green across a real defect if the defect lives in a
+    # property -- there, element ORDER; here, actual byte SIZE -- the
+    # corpus never inspects. `savez_compressed`'s entire reason to exist,
+    # as distinct from plain `savez` above, is that the output is smaller.
+    # It presently is not (it is larger). Declaring "exact" for a function
+    # whose one defining behavior is absent would repeat exactly the
+    # mistake this project already paid for once.
+    #
+    # Two things were changed as a result, both 2026-08-13:
+    #   1. `savez_compressed` now raises a `UserWarning` on every call
+    #      (`ionp-py/src/io_ops.rs`) stating plainly that the archive is
+    #      valid but not actually compressed -- so the gap is visible at
+    #      the call site a user actually looks at, not only in this
+    #      comment or a ledger dict key.
+    #   2. `tests/differential/products_io_cases.py`'s `savez_compressed`
+    #      item (`_npzc_numpy`/`_npzc_ionp`) was rewritten from a same-
+    #      implementation self-consistency round trip (which could not
+    #      structurally detect this) to a genuine cross-implementation
+    #      check against real `np.savez_compressed`, asserting BOTH values
+    #      AND `compress_size < file_size` per entry -- so this specific
+    #      regression now fails the corpus rather than passing it, and the
+    #      next person to actually implement real DEFLATE gets a test that
+    #      turns green (rather than one that was already green and proved
+    #      nothing).
+    # Real Huffman/LZ77 encoding is tracked as follow-up work, not in this
+    # task's scope: see `docs/TICKET-deflate-real-compressor.md`.
     # --- cross (products cluster) ----------------------------------- 2026-08-13
     # Implemented in `ionp-core/src/products.rs::cross`, composed from the
     # already-verified `ufunc::binary_op(Multiply)` / `ufunc::binary_op
@@ -7319,6 +7425,20 @@ TOPLEVEL_STATE = {
     # `/private/tmp/products_check.py`'s captured output: `dot (3,4)x(4,5)`,
     # `inner`, `tensordot` all FAIL bitexact while their `np.allclose` value
     # check passes).
+    #
+    # MEASURED RATE, not just an existence proof (`/private/tmp/dot_rate.py`,
+    # 200 random-float64-input trials per shape family, `np.random.seed(7)`,
+    # shapes drawn 1-8 per axis): `dot` on random 2-D x 2-D inputs is
+    # bit-exact 45/200 (22.5%); `dot` on random N-D x 1-D inputs (the shape
+    # this task's earlier single-sample check had guessed, wrongly, might be
+    # STRUCTURALLY exact) is bit-exact only 16/200 (8.0%) -- confirming that
+    # guess was coincidental luck on one sample, not a real guarantee, which
+    # is exactly why a rate over many trials was required before writing
+    # anything down here; `inner` 48/200 (24.0%); `tensordot(axes=1)` 44/200
+    # (22.0%). None of these rates is 0% (BLAS and pairwise-summation
+    # agree whenever a trial's data happens not to expose the ordering
+    # difference) and none is 100% -- both facts matter equally: the
+    # function is not simply broken, and it is not exact either.
     #
     # WHAT ACTUALLY IS EXACT within this same code, and WHY, precisely
     # enough that a future task could respect it rather than re-measure it:

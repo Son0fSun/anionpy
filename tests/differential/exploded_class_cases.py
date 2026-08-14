@@ -566,10 +566,136 @@ def _as_comparable(x):
     `bytes` -> uint8 view (byte-for-byte); everything else ->
     `np.asarray(x)` (turns a bare scalar into a comparable 0-d array of
     matching dtype).
+
+    S/U (fixed-width string) dtype anionpy arrays are a special case:
+    `np.asarray()` on them raises `NotImplementedError`, because
+    anionpy's array-protocol layer has no flat buffer to export for
+    string storage (one heap allocation per element, unlike every other
+    dtype) -- a PRE-EXISTING, unrelated gap in anionpy's array-protocol
+    layer, not a defect in `shuffle`/`choice` themselves. On that specific
+    failure we fall back to grading via `.tolist()` instead of silently
+    failing the case or dropping it from the corpus.
+
+    The fallback gate is STRUCTURAL, not a message-text match: it reads
+    `x.dtype.kind` off the object under test itself (never off a
+    conversion of it, and never off the exception's wording, which could
+    be reworded, or which some unrelated dtype could someday raise with
+    overlapping text) and only fires for `kind in ("S", "U")`. Anything
+    else re-raises -- see `_as_comparable_selftest()` below, which
+    constructs a fake non-string object that raises the identical
+    `NotImplementedError` text and asserts the guard refuses it rather
+    than silently grading it through `.tolist()`.
+
+    `.tolist()` is normally FORBIDDEN for grading here (project-standing
+    rule: it destroys NaN payload bits, signed zero, and dtype width --
+    exactly what `_bit_exact_equal`'s `.tobytes()` comparison exists to
+    catch) and this is a narrow, structurally-gated exception, not a
+    general license. It is defensible specifically for S/U dtype only
+    because there is no NaN/signed-zero/payload concept for strings at
+    all -- those hazards are float/int-specific and do not apply here.
+
+    WIDTH, unlike NaN/signed-zero, genuinely WAS at risk: a plain
+    `np.array(x.tolist())` re-infers dtype from the actual string
+    lengths present, so an anionpy `<U5` result whose drawn values all
+    happen to be shorter than 5 chars would silently become `<U3` --
+    while numpy's own result KEEPS its true declared `<U5` itemsize
+    regardless of which values were drawn (confirmed by hand: numpy's
+    `Generator.choice` on a string array does NOT narrow dtype to the
+    gathered subset). Measured this by hand first, expecting the "safe
+    (fails loud) but wrong" direction the coordinator warned to reason
+    out rather than assume -- and it WAS present: an initial
+    `np.array(x.tolist())` version genuinely mismatched real numpy's
+    `.tobytes()` on a deliberately-constructed case (`a` with varied
+    string lengths, a draw whose subset excludes the longest entries).
+    Rather than accept that as an inherent, tolerated asymmetry, the
+    fallback instead reconstructs with the SOURCE object's own declared
+    dtype string (`np.array(x.tolist(), dtype=x.dtype.str)`), which
+    preserves the true itemsize exactly and eliminates the mismatch
+    entirely -- verified against the same deliberately-mismatched case,
+    which now byte-matches. `choice`'s corpus below keeps the
+    `"array_a_strings_width_mismatch"` case (a with varied string
+    lengths, `replace=False` so the draw provably excludes the widest
+    entries) permanently, so a future change to this fallback that
+    reintroduces the narrowing bug fails loud on an existing case rather
+    than needing to be freshly rediscovered.
     """
     if isinstance(x, bytes):
         return np.frombuffer(x, dtype=np.uint8)
-    return np.asarray(x)
+    try:
+        return np.asarray(x)
+    except NotImplementedError:
+        dtype = getattr(x, "dtype", None)
+        kind = getattr(dtype, "kind", None)
+        if kind not in ("S", "U"):
+            raise
+        # dtype=x.dtype.str (NOT a bare np.array(x.tolist())) is load-
+        # bearing: it preserves the SOURCE's true declared itemsize even
+        # when the drawn/shuffled subset's actual string lengths are all
+        # shorter -- see the width paragraph above.
+        return np.array(x.tolist(), dtype=x.dtype.str)
+
+
+def _as_comparable_selftest():
+    """Proves the `_as_comparable` fallback gate is structural (reads
+    `x.dtype.kind`) rather than a message-text match, per the
+    coordinator's explicit demand that "a guard you cannot construct a
+    rejection for is decorative." Run at import time (bottom of this
+    module) so a regression fails LOUD (ImportError-time AssertionError)
+    the moment anyone weakens the gate back to a substring check, not
+    silently the next time the corpus happens to hit it.
+    """
+    class _FakeKind:
+        def __init__(self, kind):
+            self.kind = kind
+
+    class _FakeNonString:
+        """Raises the EXACT `NotImplementedError` text real anionpy S/U
+        arrays raise, but declares a non-string dtype -- if the gate were
+        a substring match on the message, this would incorrectly fall
+        through to `.tolist()` and silently grade float/int data through
+        the forbidden lossy path. It must instead re-raise.
+        """
+        dtype = _FakeKind("f")
+
+        def __array__(self, *a, **kw):
+            raise NotImplementedError(
+                "anionpy: float64 has no single flat buffer to expose "
+                "through the array protocol (fabricated for "
+                "_as_comparable_selftest, not a real anionpy message)"
+            )
+
+        def tolist(self):
+            # If reached, the gate failed to re-raise -- return something
+            # observably wrong (not what a real float conversion would
+            # be) so a bug here cannot accidentally look like a pass.
+            return ["THIS SHOULD NEVER BE REACHED"]
+
+    try:
+        _as_comparable(_FakeNonString())
+    except NotImplementedError as e:
+        assert "fabricated for _as_comparable_selftest" in str(e), (
+            "_as_comparable's fallback gate re-raised, but not the "
+            f"original exception: got {e!r}"
+        )
+    else:
+        raise AssertionError(
+            "_as_comparable's fallback gate is a message-text match, not "
+            "a structural dtype.kind check: it swallowed a fake "
+            "NotImplementedError from a non-string (kind='f') object "
+            "instead of re-raising it. This is exactly the regression "
+            "the coordinator's 2026-08-13 review warned about -- fix the "
+            "gate to check `x.dtype.kind in ('S', 'U')`, not the "
+            "exception's message text."
+        )
+
+    # Positive control: a REAL anionpy string array must still be caught
+    # and graded via `.tolist()`, proving the gate isn't so strict it now
+    # rejects the legitimate case it exists for.
+    _real_string_result = _as_comparable(anionpy.array(["a", "bb", "ccc"]))
+    assert _real_string_result.tolist() == ["a", "bb", "ccc"], _real_string_result
+
+
+_as_comparable_selftest()
 
 
 def _make_generator_adapters(method_name):
@@ -687,5 +813,328 @@ EXPLODED_CLASS_SPECS["random.Generator.bytes"] = ItemSpec(
         ("n16", (456, 16), {}),
     ],
     numpy_adapter=_bytes_np, ionp_adapter=_bytes_ionp,
+    atol=0.0, rtol=0.0,
+)
+
+# 2026-08-13 (this session): `dirichlet`/`multinomial` are registered as
+# their own dedicated exploded specs from the start (not routed through
+# random_cases.py's umbrella "random.Generator" bucket first) -- learning
+# directly from this session's own umbrella-bucket ledger-gap discovery
+# (see docs/UMBRELLA-BUCKET-LEDGER-GAP-2026-08-13.md). Both are scoped to
+# the non-broadcast call form (scalar `n` / 1-D `alpha`/`pvals`), matching
+# `linalg.svd`'s prior scoping precedent.
+#
+# Per the coordinator's explicit warning, both methods draw in a loop
+# whose trip count depends on the caller's requested output size, so the
+# corpus below deliberately varies `size` to run that loop 1 (size=None),
+# 2 (size=2 / n=0 zero-trip-body case), and many (size=7) times -- a
+# corpus of similar/single-shaped inputs would only ever exercise one
+# trip count and could hide an off-by-one in the loop bounds.
+_dirichlet_np, _dirichlet_ionp = _make_generator_adapters("dirichlet")
+EXPLODED_CLASS_SPECS["random.Generator.dirichlet"] = ItemSpec(
+    name="random.Generator.dirichlet", kind="custom",
+    custom_cases=lambda: [
+        # standard path (alpha.max() >= 0.1), trip counts 1 / 2 / 7
+        ("standard_noarg", (123, [2.0, 3.0, 5.0]), {}),
+        ("standard_size2", (456, [2.0, 3.0, 5.0]), {"size": 2}),
+        ("standard_size7", (789, [2.0, 3.0, 5.0]), {"size": 7}),
+        # small-alpha / stick-breaking path (alpha.max() < 0.1)
+        ("small_alpha_noarg", (321, [0.01, 0.02, 0.03]), {}),
+        ("small_alpha_size2", (654, [0.01, 0.02, 0.03]), {"size": 2}),
+        ("small_alpha_size7", (987, [0.01, 0.02, 0.03]), {"size": 7}),
+        # k=1 edge case (single-category, both branches degenerate to 1.0)
+        ("k1_size3", (111, [5.0]), {"size": 3}),
+        # k=0 edge case: numpy returns an all-empty array, draws nothing
+        ("k0_noarg", (222, []), {}),
+        ("k0_size3", (333, []), {"size": 3}),
+        # error paths
+        ("alpha_negative", (444, [1.0, -1.0, 2.0]), {}),
+    ],
+    numpy_adapter=_dirichlet_np, ionp_adapter=_dirichlet_ionp,
+    atol=0.0, rtol=0.0,
+)
+
+
+def _multinomial_np(seed, n, pvals, **kwargs):
+    g = np.random.default_rng(seed)
+    return _as_comparable(g.multinomial(n, pvals, **kwargs))
+
+
+def _multinomial_ionp(seed, n, pvals, **kwargs):
+    g = anionpy.random.Generator(anionpy.random.PCG64(seed))
+    return _as_comparable(g.multinomial(n, pvals, **kwargs))
+
+
+EXPLODED_CLASS_SPECS["random.Generator.multinomial"] = ItemSpec(
+    name="random.Generator.multinomial", kind="custom",
+    custom_cases=lambda: [
+        # trip counts 1 / 2 / 7 against the SAME (n, pvals) so the loop's
+        # data-dependent trip count is the only varying factor
+        ("trip1_noarg", (123, 20, [0.2, 0.3, 0.5]), {}),
+        ("trip2_size2", (123, 20, [0.2, 0.3, 0.5]), {"size": 2}),
+        ("trip7_size7", (123, 20, [0.2, 0.3, 0.5]), {"size": 7}),
+        # n=0: every trip's binomial short-circuits on its first draw
+        ("n_zero_size2", (456, 0, [0.2, 0.3, 0.5]), {"size": 2}),
+        # d=2 (single binomial trip per draw, no `remaining_p` renorm)
+        ("d2_size3", (789, 10, [0.4, 0.6]), {"size": 3}),
+        # error paths
+        ("pvals_out_of_range", (321, 10, [0.5, 1.5, -1.0]), {}),
+        ("pvals_sum_too_large", (654, 10, [0.6, 0.6, 0.1]), {}),
+        ("n_negative", (987, -5, [0.5, 0.5]), {}),
+        ("pvals_empty", (111, 10, []), {}),
+    ],
+    numpy_adapter=_multinomial_np, ionp_adapter=_multinomial_ionp,
+    atol=0.0, rtol=0.0,
+)
+
+
+def _mvhg_np(seed, colors, nsample, **kwargs):
+    g = np.random.default_rng(seed)
+    return _as_comparable(g.multivariate_hypergeometric(colors, nsample, **kwargs))
+
+
+def _mvhg_ionp(seed, colors, nsample, **kwargs):
+    g = anionpy.random.Generator(anionpy.random.PCG64(seed))
+    return _as_comparable(g.multivariate_hypergeometric(colors, nsample, **kwargs))
+
+
+# 2026-08-13 (this session): `multivariate_hypergeometric` registered as its
+# own dedicated exploded spec from the start (same umbrella-bucket lesson as
+# dirichlet/multinomial above). Only the default `method='marginals'` is
+# implemented -- `method='count'` is a real, numpy-successful, but
+# algorithmically DIFFERENT draw order that is deliberately scoped out
+# (raises NotImplementedError; see ionp-py/src/random.rs). That case is
+# intentionally absent from this corpus: it CANNOT match numpy's own
+# `method='count'` output (different algorithm entirely), so including it
+# here would either force a false PASS via special-casing or a permanent,
+# uninformative FAIL -- the scoping itself is the declaration, enforced by
+# the loud NotImplementedError, not by a differential-suite case.
+#
+# `colors` varies in length (1 / 2 / 3) so the per-draw loop's
+# data-dependent trip count (num_colors - 1 sequential hypergeometric
+# draws) is exercised at 0, 1, and 2 iterations respectively. `nsample` is
+# chosen both under and over total/2 so the "more than half" complement
+# branch -- which changes both draw order (draws for the cheaper
+# complement) and final values (post-loop negation against `colors`) -- is
+# hit on both sides, not just the direct path.
+EXPLODED_CLASS_SPECS["random.Generator.multivariate_hypergeometric"] = ItemSpec(
+    name="random.Generator.multivariate_hypergeometric", kind="custom",
+    custom_cases=lambda: [
+        # direct path (nsample <= total/2), trip counts 1 / 2 / 7
+        ("trip1_noarg", (123, [16, 8, 4], 6), {}),
+        ("trip2_size2", (123, [16, 8, 4], 6), {"size": 2}),
+        ("trip7_size7", (123, [16, 8, 4], 6), {"size": 7}),
+        # more-than-half complement branch (nsample > total/2)
+        ("more_than_half_size5", (456, [16, 8, 4], 25), {"size": 5}),
+        # single color: loop body never runs (num_colors - 1 == 0), all of
+        # nsample assigned unconditionally to the one slot
+        ("single_color_size3", (789, [10], 5), {"size": 3}),
+        # two colors: loop runs exactly once
+        ("two_color_size5", (321, [12, 20], 15), {"size": 5}),
+        # nsample == 0: nothing drawn, all-zero output, no bitstream
+        # consumption
+        ("nsample_zero_size2", (654, [16, 8, 4], 0), {"size": 2}),
+        # error paths (validation order transcribed from numpy's
+        # _generator.pyx: method membership, then nsample nonneg, then
+        # colors nonneg, then sum(colors) overflow, then marginals'
+        # total<1e9 ceiling, then nsample>total)
+        ("method_invalid", (111, [5, 5], 3), {"method": "bogus"}),
+        ("colors_negative", (222, [5, -1, 3], 3), {}),
+        ("nsample_negative", (333, [5, 5, 5], -1), {}),
+        ("nsample_gt_total", (444, [2, 2], 10), {}),
+        ("colors_empty", (555, [], 0), {}),
+    ],
+    numpy_adapter=_mvhg_np, ionp_adapter=_mvhg_ionp,
+    atol=0.0, rtol=0.0,
+)
+
+
+# 2026-08-13 (this session, choice/shuffle/permuted/permutation family):
+# `shuffle` mutates its argument in place and returns `None`, so its
+# adapters build a fresh array from `data`, call `.shuffle()` for its
+# side effect, and grade the MUTATED array -- not the (always-`None`)
+# return value. Scoped in: 1-D arrays only (numpy's own `axis` support for
+# ndim > 1 swaps whole cross-sections, a different, unimplemented
+# algorithm -- see `ionp-py/src/random.rs`'s family doc comment). Data
+# varies length (0 / 1 / small / larger) and dtype (int, float, string)
+# since `shuffle_masked` is generic over every `Buffer` variant including
+# the non-`Copy` string ones, and a length-0/1 array is the "loop body
+# never runs" edge this family's masked Fisher-Yates shares with
+# `_shuffle_raw`'s own empty-range early return.
+def _shuffle_np(seed, data, **kwargs):
+    g = np.random.default_rng(seed)
+    arr = np.array(data)
+    g.shuffle(arr, **kwargs)
+    return _as_comparable(arr)
+
+
+def _shuffle_ionp(seed, data, **kwargs):
+    g = anionpy.random.Generator(anionpy.random.PCG64(seed))
+    arr = anionpy.array(data)
+    g.shuffle(arr, **kwargs)
+    return _as_comparable(arr)
+
+
+EXPLODED_CLASS_SPECS["random.Generator.shuffle"] = ItemSpec(
+    name="random.Generator.shuffle", kind="custom",
+    custom_cases=lambda: [
+        ("len10_int", (42, list(range(10))), {}),
+        ("len6_int_seed7", (7, list(range(6))), {}),
+        ("len1", (42, [99]), {}),
+        ("len0", (42, []), {}),
+        ("floats", (42, [0.5, 1.5, 2.5, 3.5, 4.5]), {}),
+        ("strings", (42, ["a", "bb", "ccc", "dddd"]), {}),
+        ("axis_neg1_is_axis0_for_1d", (42, list(range(10))), {"axis": -1}),
+    ],
+    numpy_adapter=_shuffle_np, ionp_adapter=_shuffle_ionp,
+    atol=0.0, rtol=0.0,
+)
+
+
+# `permutation` returns a fresh array (input untouched) -- int `x` draws
+# `arange(x)` + the SAME masked shuffle `shuffle` itself uses; array `x`
+# copies first. Both sub-paths are exercised (an `int` case AND a
+# `list`/array case with equal content, so any divergence between the two
+# code paths shows up as a same-seed mismatch between them if compared
+# externally -- though grading here is only against real numpy per case).
+def _permutation_np(seed, x, **kwargs):
+    g = np.random.default_rng(seed)
+    return _as_comparable(g.permutation(x, **kwargs))
+
+
+def _permutation_ionp(seed, x, **kwargs):
+    g = anionpy.random.Generator(anionpy.random.PCG64(seed))
+    if isinstance(x, list):
+        x = anionpy.array(x)
+    return _as_comparable(g.permutation(x, **kwargs))
+
+
+EXPLODED_CLASS_SPECS["random.Generator.permutation"] = ItemSpec(
+    name="random.Generator.permutation", kind="custom",
+    custom_cases=lambda: [
+        ("int_10", (42, 10), {}),
+        ("int_1", (42, 1), {}),
+        ("int_0", (42, 0), {}),
+        ("array_equiv_10", (42, list(range(10))), {}),
+        ("array_seed7", (7, list(range(6))), {}),
+        ("array_floats", (42, [0.5, 1.5, 2.5, 3.5, 4.5]), {}),
+    ],
+    numpy_adapter=_permutation_np, ionp_adapter=_permutation_ionp,
+    atol=0.0, rtol=0.0,
+)
+
+
+# `permuted` (axis=None, no `out=`): flattens, shuffles the flat
+# sequence, reshapes back -- for the 1-D inputs this corpus scopes in,
+# that is bit-identical to `permutation`'s array path, but graded as its
+# own item since it is a genuinely separate numpy entry point (and this
+# binding's own `axis=`/`out=` NotImplementedError branches are real,
+# separate code this corpus does not (and, being error paths that raise
+# before drawing anything, could not meaningfully) byte-compare against
+# numpy's actually-implemented behavior there).
+def _permuted_np(seed, x, **kwargs):
+    g = np.random.default_rng(seed)
+    return _as_comparable(g.permuted(np.array(x), **kwargs))
+
+
+def _permuted_ionp(seed, x, **kwargs):
+    g = anionpy.random.Generator(anionpy.random.PCG64(seed))
+    return _as_comparable(g.permuted(anionpy.array(x), **kwargs))
+
+
+EXPLODED_CLASS_SPECS["random.Generator.permuted"] = ItemSpec(
+    name="random.Generator.permuted", kind="custom",
+    custom_cases=lambda: [
+        ("len10", (42, list(range(10))), {}),
+        ("len6_seed7", (7, list(range(6))), {}),
+        ("len1", (42, [99]), {}),
+        ("len0", (42, []), {}),
+        ("floats", (42, [0.5, 1.5, 2.5, 3.5, 4.5]), {}),
+    ],
+    numpy_adapter=_permuted_np, ionp_adapter=_permuted_ionp,
+    atol=0.0, rtol=0.0,
+)
+
+
+# `choice`: the coordinator's own point 2/3 apply hardest here -- the
+# `replace` x `p` 2x2 is a genuine cross-product where each cell draws via
+# a DIFFERENT primitive (Lemire uniform-int / cdf+searchsorted / Floyd's
+# algorithm+hash-set / tail-shuffle), so each cell gets its own cases
+# rather than being covered incidentally by a shared default. `a` varies
+# provenance (plain int vs. 1-D array, default int64 vs. explicit int32
+# dtype, string dtype) and `p` varies edge shape (exact zero entry, a sum
+# pulled to just inside the `atol` tolerance boundary) per point 3.
+# `replace=False, p=given` is deliberately ABSENT from this corpus (see
+# `ionp-py/src/random.rs`'s doc comment on that branch): it raises
+# `NotImplementedError` there, which IS this pass's declaration for that
+# cell, not a placeholder for a differential case that would only ever
+# fail.
+def _choice_np(seed, a, **kwargs):
+    g = np.random.default_rng(seed)
+    # `a` as `("<dtype-name>", [...])` is this corpus's own convention
+    # (not numpy's) for exercising `a`-array-dtype PROVENANCE (point 3 of
+    # the coordinator's instructions) with one case definition shared by
+    # both adapters below.
+    if isinstance(a, tuple):
+        a = np.array(a[1], dtype=a[0])
+    return _as_comparable(g.choice(a, **kwargs))
+
+
+def _choice_ionp(seed, a, **kwargs):
+    g = anionpy.random.Generator(anionpy.random.PCG64(seed))
+    if isinstance(a, tuple):
+        a = anionpy.array(a[1], dtype=a[0])
+    elif isinstance(a, list):
+        a = anionpy.array(a)
+    return _as_comparable(g.choice(a, **kwargs))
+
+
+_ATOL_CHOICE = float(np.sqrt(np.finfo(np.float64).eps))
+EXPLODED_CLASS_SPECS["random.Generator.choice"] = ItemSpec(
+    name="random.Generator.choice", kind="custom",
+    custom_cases=lambda: [
+        # replace=True, p=None (Lemire uniform int)
+        ("replace_t_p_none_int_a", (42, 20), {"size": 5}),
+        ("replace_t_p_none_scalar", (42, 20), {}),
+        ("replace_t_p_none_array_a", (42, list(range(20))), {"size": 5}),
+        # replace=True, p given (cdf + searchsorted)
+        ("replace_t_p_given", (42, 5), {"size": 10, "p": [0.1, 0.1, 0.2, 0.3, 0.3]}),
+        ("replace_t_p_given_scalar", (42, 5), {"p": [0.1, 0.1, 0.2, 0.3, 0.3]}),
+        # p with an exact-zero entry (never selected, but still consumes a
+        # cdf slot and a uniform draw per sample)
+        ("replace_t_p_exact_zero", (2, 5), {"size": 20, "p": [0.0, 0.25, 0.25, 0.25, 0.25]}),
+        # p summing to just inside the atol tolerance (accepted, not
+        # renormalized -- exercises the boundary itself, not just a
+        # clean 1.0)
+        ("replace_t_p_boundary_under",
+         (1, 5), {"size": 3, "p": [0.2 - _ATOL_CHOICE / 10, 0.2, 0.2, 0.2, 0.2]}),
+        # replace=False, p=None, Floyd's-algorithm branch (pop_size <= 10000)
+        ("replace_f_p_none_floyd", (42, 20), {"size": 5, "replace": False}),
+        ("replace_f_p_none_floyd_noshuffle", (42, 20), {"size": 5, "replace": False, "shuffle": False}),
+        # replace=False, p=None, tail-shuffle branch (pop_size > 10000 and
+        # size > pop_size / cutoff)
+        ("replace_f_p_none_tail", (42, 20000), {"size": 1000, "replace": False}),
+        # a as a 1-D array of non-default dtype
+        ("array_a_int32", (4, ("int32", [10, 20, 30, 40, 50])), {"size": 4}),
+        ("array_a_strings", (4, ["a", "b", "c", "d", "e"]), {"size": 3}),
+        # `a`'s declared string width (<U5, from "eeeee") vs. the drawn
+        # subset's actual max length (<U3, "bb"/"ccc") deliberately do
+        # NOT coincide -- replace=False + this seed/size is hand-verified
+        # (./.venv/bin/python) to draw ["bb", "ccc"], excluding both
+        # width-5 and width-4 entries, so this case only passes if
+        # `_as_comparable`'s S/U fallback genuinely preserves the SOURCE
+        # dtype's width rather than re-inferring it from the drawn
+        # values. See `_as_comparable`'s docstring above for the
+        # `dtype=x.dtype.str` fix this case guards.
+        ("array_a_strings_width_mismatch",
+         (1, ["a", "bb", "ccc", "dddd", "eeeee"]), {"size": 2, "replace": False}),
+        # error paths
+        ("a_nonpositive_int", (5, -3), {"size": 2}),
+        ("p_sum_too_far_off", (5, 5), {"p": [0.1, 0.1, 0.1, 0.1, 0.1]}),
+        ("replace_false_size_gt_pop", (5, 5), {"size": 10, "replace": False}),
+        ("p_length_mismatch", (5, 5), {"p": [0.5, 0.5]}),
+        ("p_contains_negative", (5, 5), {"p": [-0.1, 0.3, 0.3, 0.3, 0.2]}),
+    ],
+    numpy_adapter=_choice_np, ionp_adapter=_choice_ionp,
     atol=0.0, rtol=0.0,
 )

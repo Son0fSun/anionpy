@@ -16,6 +16,7 @@ from anionpy._anionpy import (
     array,
     ndarray,
     dtype,
+    _reconstruct_ndarray,
     sum_f64,
     seterr,
     geterr,
@@ -1172,6 +1173,57 @@ def allclose(a, b, rtol=1.0e-5, atol=1.0e-8, equal_nan=False):
     """True if every element of `a` is close to the matching element of `b`."""
     return _isclose_arr(a, b, rtol, atol, equal_nan).all().item()
 
+
+
+
+
+
+
+def _ndarray_buffer(self, flags=0):
+    """PEP 688 buffer export.
+
+    Returns a typed, shaped memoryview of a C-contiguous copy (`tobytes()`).
+    Complex and any empty N-D array raise TypeError so ``np.asarray`` falls
+    back to ``__array__`` (verified). A naive ``memoryview(tobytes())`` is
+    uint8-1d and *steals* asarray; do not regress to that.
+    """
+    _ = flags
+    name = self.dtype.name
+    fmt = {
+        "bool": "?",
+        "int8": "b",
+        "int16": "h",
+        "int32": "i",
+        "int64": "q",
+        "uint8": "B",
+        "uint16": "H",
+        "uint32": "I",
+        "uint64": "Q",
+        "float16": "e",
+        "float32": "f",
+        "float64": "d",
+    }.get(name)
+    if fmt is None:
+        raise TypeError(
+            f"anionpy.ndarray.__buffer__: dtype {name!r} has no native "
+            "single-character memoryview format"
+        )
+    shape = tuple(int(s) for s in self.shape)
+    raw = self.tobytes()
+    mv = memoryview(raw)
+    if __import__("builtins").any(s == 0 for s in shape):
+        if self.ndim == 1:
+            return mv.cast(fmt)
+        raise TypeError(
+            "anionpy.ndarray.__buffer__: empty N-D arrays cannot be cast "
+            "to a shaped memoryview"
+        )
+    if self.ndim == 0:
+        return mv.cast(fmt, ())
+    return mv.cast(fmt, shape)
+
+
+ndarray.__buffer__ = _ndarray_buffer
 
 __all__ = [
     "testing",

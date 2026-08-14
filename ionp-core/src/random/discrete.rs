@@ -23,6 +23,7 @@
 //! to a cache hit, just slower. No caller of this module needs to thread
 //! cache state through.
 
+use super::bounded;
 use super::distributions::standard_gamma;
 use super::logfactorial::logfactorial;
 use super::BitGen64;
@@ -552,6 +553,227 @@ pub fn multinomial(bg: &mut dyn BitGen64, n: i64, pix: &[f64], mnix: &mut [i64])
     }
 }
 
+// ---------------------------------------------------------------------------
+// Multivariate hypergeometric, "marginals" method (built on `hypergeometric`).
+// ---------------------------------------------------------------------------
+
+/// `Generator.multivariate_hypergeometric(colors, nsample, size=None,
+/// method='marginals')`'s DEFAULT `method='marginals'` algorithm,
+/// transcribed from numpy's `random_mvhg_marginals.c`
+/// `random_multivariate_hypergeometric_marginals`. `method='count'` (an
+/// alternate, statistically-different-but-equally-valid algorithm using a
+/// `total`-sized temp array and a distinct draw order) is NOT implemented
+/// -- see `ionp-py/src/random.rs`'s doc comment on the `#[pymethods]`
+/// wrapper for why only the default is in scope.
+///
+/// Writes one length-`colors.len()` variate into `out`
+/// (`out.len() == colors.len()`, caller must zero-init -- this function
+/// does not touch trailing/skipped entries when the `num_to_sample > 0`
+/// loop-exit condition is hit early, exactly mirroring the C source's own
+/// "variates is not initialized in the function" contract). `total` is
+/// `colors.iter().sum()` (caller-computed, exactly mirroring the C
+/// function's own redundant-total-as-parameter shape -- NOT recomputed
+/// here).
+///
+/// Algorithm: draws `num_colors - 1` correlated univariate
+/// `hypergeometric` samples in sequence (color `j`'s draw uses `remaining
+/// = total - sum(colors[..=j])` as its `bad` parameter and `num_to_sample
+/// = nsample - sum(previous draws)` as its `sample` parameter), then
+/// assigns whatever's left of `num_to_sample` to the LAST color
+/// unconditionally (no further draw). A "more than half" symmetry
+/// optimization runs FIRST: if `nsample > total / 2`, the function draws
+/// for `total - nsample` (numerically cheaper -- `hypergeometric`'s own
+/// cost scales with the smaller side) and then complements every entry
+/// (`out[k] = colors[k] - out[k]`) at the end -- this changes the ORDER
+/// and VALUES of the underlying draws relative to the naive nsample, not
+/// just a final cosmetic transform, so it must run exactly where numpy
+/// runs it (before the draw loop, not folded into the loop itself).
+pub fn multivariate_hypergeometric_marginals(
+    bg: &mut dyn BitGen64,
+    total: i64,
+    colors: &[i64],
+    nsample: i64,
+    out: &mut [i64],
+) {
+    let num_colors = colors.len();
+    debug_assert_eq!(out.len(), num_colors);
+    if total == 0 || nsample == 0 || num_colors == 0 {
+        return;
+    }
+
+    let more_than_half = nsample > total / 2;
+    let mut num_to_sample = if more_than_half { total - nsample } else { nsample };
+    let mut remaining = total;
+
+    for j in 0..num_colors.saturating_sub(1) {
+        if num_to_sample <= 0 {
+            break;
+        }
+        remaining -= colors[j];
+        let r = hypergeometric(bg, colors[j], remaining, num_to_sample);
+        out[j] = r;
+        num_to_sample -= r;
+    }
+    if num_to_sample > 0 {
+        out[num_colors - 1] = num_to_sample;
+    }
+    if more_than_half {
+        for k in 0..num_colors {
+            out[k] = colors[k] - out[k];
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sequence operations: `shuffle`/`permutation`/`permuted`/`choice`.
+// Transcribed from `_generator.pyx`'s `_shuffle_raw`/`_shuffle_int` free
+// functions and `Generator.choice`'s replace/no-replace branches. Scoped
+// to 1-D contiguous data (any dtype, generic over `T: Copy`) -- N-D
+// `axis=`-navigated shuffling and object-array (`dtype=object`) handling
+// are out of scope (ionp has no Python-object dtype at all, so the
+// numpy source's GIL-holding "hasobject" branch is moot here).
+//
+// TWO DISTINCT bounded-draw primitives are used by different callers in
+// numpy's own source, and mixing them up is exactly the kind of
+// bit-stream-consumption bug the task's stream-position-probe mandate
+// exists to catch:
+//   - `shuffle`/`permuted`/`permutation` (via `shuffle`) all bottom out
+//     in `_shuffle_raw`, which draws via `random_interval` (masked
+//     rejection, smallest power-of-2-minus-1 mask >= max, next_uint32 if
+//     max <= 0xFFFFFFFF else next_uint64) -- see `shuffle_masked` below.
+//   - `choice`'s replace=False/p=None Floyd's-algorithm AND tail-shuffle
+//     branches instead call `random_bounded_uint64(bitgen, 0, j, 0, 0)`
+//     (`use_masked=false` -> Lemire's algorithm, NOT masked rejection) --
+//     see `shuffle_lemire`/`choice_no_replace_no_p` below. This is NOT a
+//     numpy inconsistency to paper over: it is numpy's actual, intentional
+//     source, and reproducing it exactly (rather than "simplifying" both
+//     call sites to one primitive) is required for bit-exactness.
+// ---------------------------------------------------------------------------
+
+/// `_shuffle_raw`'s Fisher-Yates loop: `for i in reversed(range(first,
+/// n))`, `j = random_interval(bitgen, i)`, swap `data[i]`/`data[j]`
+/// (skipped when `i == j`, matching the C source's own
+/// "memcpy is undefined when i==j" guard -- a no-op either way, kept for
+/// parity rather than correctness). `first = 1` (numpy's own default for
+/// whole-array shuffling); with `n == 0` the loop range is empty and
+/// nothing is drawn, matching numpy's own no-op-on-empty behavior.
+pub fn shuffle_masked<T>(bg: &mut dyn BitGen64, data: &mut [T]) {
+    let n = data.len();
+    if n == 0 {
+        return;
+    }
+    for i in (1..n).rev() {
+        let j = bounded::random_interval(bg, i as u64) as usize;
+        if i != j {
+            data.swap(i, j);
+        }
+    }
+}
+
+/// `_shuffle_int`'s Fisher-Yates loop: `for i in reversed(range(first,
+/// n))`, `j = random_bounded_uint64(bitgen, 0, i, 0, 0)` (Lemire, NOT
+/// masked -- see module doc above), ALWAYS swaps (no `i == j` skip in the
+/// C source, since the swap there is only 3 word-moves, cheap enough that
+/// numpy doesn't bother branching around it -- functionally identical
+/// output and identical bit-stream consumption either way). `first` is
+/// exposed as a parameter because `choice`'s tail-shuffle branch calls
+/// this with `first = max(pop_size - size, 1)`, not always `1`.
+pub fn shuffle_lemire<T>(bg: &mut dyn BitGen64, data: &mut [T], first: usize) {
+    let n = data.len();
+    if first >= n {
+        return;
+    }
+    for i in (first..n).rev() {
+        let j = bounded::bounded_u64(bg, 0, i as u64) as usize;
+        data.swap(i, j);
+    }
+}
+
+/// Smallest bit-mask `>= max`, matching `_generator.pyx`'s `_gen_mask`
+/// (identical bit-smearing trick to `bounded::random_interval`'s own
+/// internal mask computation, duplicated here since `choice`'s hash-set
+/// sizing needs the mask value itself, not just a bounded draw).
+fn gen_mask(max: u64) -> u64 {
+    let mut mask = max;
+    mask |= mask >> 1;
+    mask |= mask >> 2;
+    mask |= mask >> 4;
+    mask |= mask >> 8;
+    mask |= mask >> 16;
+    mask |= mask >> 32;
+    mask
+}
+
+/// `Generator.choice(..., replace=False, p=None)`'s index-selection
+/// algorithm, returning the `size`-length array of selected indices into
+/// `0..pop_size` (NOT yet shuffled into final `idx.reshape(shape)` order
+/// by the caller -- this function's own internal `shuffle` bool controls
+/// only the FINAL in-function shuffle step, matching numpy's own
+/// `shuffle=True` default).
+///
+/// Two sub-algorithms, matching `_generator.pyx`'s own heuristic branch
+/// EXACTLY (both consume the bit stream differently, so picking the
+/// "simpler" one unconditionally would silently diverge from numpy
+/// whenever `pop_size > 10000` and `size` is large relative to
+/// `pop_size`):
+///
+///   - `pop_size > 10000 && size > pop_size / cutoff` (`cutoff = 50` if
+///     `shuffle` else `20`): "tail shuffle" -- build `idx = 0..pop_size`,
+///     Lemire-Fisher-Yates-shuffle (`shuffle_lemire`) only its tail
+///     (`first = max(pop_size - size, 1)`), return the last `size`
+///     entries.
+///   - otherwise: Floyd's algorithm with an open-addressing uint64 hash
+///     set (capacity = smallest power of 2 >= `1.2 * size`, linear
+///     probing on collision), `for j in (pop_size - size)..pop_size`:
+///     draw `val = bounded_u64(bg, 0, j)` (Lemire); if `val` is already
+///     in the hash set, insert `j` itself as the selected index instead
+///     (the classic in-place Floyd trick); the newly-selected index for
+///     slot `j` is always appended in order of `j`, THEN (only if
+///     `shuffle` is true) the whole `size`-length output is
+///     Lemire-Fisher-Yates-shuffled in place (`shuffle_lemire`, `first =
+///     1`) as a separate final pass.
+pub fn choice_no_replace_no_p(bg: &mut dyn BitGen64, pop_size: i64, size: i64, shuffle: bool) -> Vec<i64> {
+    if size == 0 {
+        return Vec::new();
+    }
+    let cutoff: i64 = if shuffle { 50 } else { 20 };
+    if pop_size > 10000 && size > pop_size / cutoff {
+        let mut idx: Vec<i64> = (0..pop_size).collect();
+        let first = std::cmp::max(pop_size - size, 1) as usize;
+        shuffle_lemire(bg, &mut idx, first);
+        idx[(pop_size - size) as usize..].to_vec()
+    } else {
+        let mut out = vec![0i64; size as usize];
+        let set_size_hint = (1.2 * size as f64) as u64;
+        let mask = gen_mask(set_size_hint);
+        let set_size = 1 + mask;
+        let mut hash_set = vec![u64::MAX; set_size as usize];
+        for j in (pop_size - size)..pop_size {
+            let val = bounded::bounded_u64(bg, 0, j as u64);
+            let mut loc = (val & mask) as usize;
+            while hash_set[loc] != u64::MAX && hash_set[loc] != val {
+                loc = ((loc as u64 + 1) & mask) as usize;
+            }
+            let out_idx = (j - (pop_size - size)) as usize;
+            if hash_set[loc] == u64::MAX {
+                hash_set[loc] = val;
+                out[out_idx] = val as i64;
+            } else {
+                let mut loc2 = (j as u64 & mask) as usize;
+                while hash_set[loc2] != u64::MAX {
+                    loc2 = ((loc2 as u64 + 1) & mask) as usize;
+                }
+                hash_set[loc2] = j as u64;
+                out[out_idx] = j;
+            }
+        }
+        if shuffle {
+            shuffle_lemire(bg, &mut out, 1);
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -643,5 +865,269 @@ mod tests {
         let mut bg = pcg64(42);
         let got: Vec<i64> = (0..5).map(|_| hypergeometric(&mut bg, 15, 15, 10)).collect();
         assert_eq!(got, vec![5, 6, 6, 4, 3]);
+    }
+
+    // np.random.default_rng(42).multinomial(20, [0.2, 0.3, 0.5]) ->
+    // [5, 5, 10]  (single draw, d=3 -> d-1=2 binomial trips)
+    #[test]
+    fn multinomial_single_draw_seed42() {
+        let mut bg = pcg64(42);
+        let pvals = [0.2, 0.3, 0.5];
+        let mut out = vec![0i64; 3];
+        multinomial(&mut bg, 20, &pvals, &mut out);
+        assert_eq!(out, vec![5, 5, 10]);
+    }
+
+    // np.random.default_rng(42).multinomial(20, [0.2, 0.3, 0.5], size=7) ->
+    // [[5, 5, 10], [6, 6, 8], [2, 11, 7], [5, 7, 8], [2, 6, 12], [3, 9, 8],
+    //  [5, 7, 8]]  -- variable data-dependent trip count guard: this is
+    // the SAME (seed, n, pvals) as the size=1 case above, re-drawn 7
+    // times in a row from one continuing bit stream, so the first row
+    // must reproduce exactly and the stream must stay in lockstep for
+    // all 7 (the "loop trip count depends on the data" trap the ticket's
+    // coordinator warned about -- this corpus exercises trip counts
+    // 1 and 7 explicitly, not just one fixed shape).
+    #[test]
+    fn multinomial_many_draws_seed42() {
+        let mut bg = pcg64(42);
+        let pvals = [0.2, 0.3, 0.5];
+        let mut got = Vec::new();
+        for _ in 0..7 {
+            let mut row = vec![0i64; 3];
+            multinomial(&mut bg, 20, &pvals, &mut row);
+            got.push(row);
+        }
+        assert_eq!(
+            got,
+            vec![
+                vec![5, 5, 10],
+                vec![6, 6, 8],
+                vec![2, 11, 7],
+                vec![5, 7, 8],
+                vec![2, 6, 12],
+                vec![3, 9, 8],
+                vec![5, 7, 8],
+            ]
+        );
+    }
+
+    // np.random.default_rng(42).multinomial(0, [0.2, 0.3, 0.5], size=2) ->
+    // [[0, 0, 0], [0, 0, 0]]  -- n=0 short-circuits `dn <= 0` on the FIRST
+    // binomial draw (draw=0 always when n=0), so mnix[d-1] never gets its
+    // explicit `if dn > 0` assignment either -- confirms the all-zero
+    // array pre-fill assumption `multinomial`'s doc comment relies on.
+    #[test]
+    fn multinomial_n_zero_seed42() {
+        let mut bg = pcg64(42);
+        let pvals = [0.2, 0.3, 0.5];
+        let mut got = Vec::new();
+        for _ in 0..2 {
+            let mut row = vec![0i64; 3];
+            multinomial(&mut bg, 0, &pvals, &mut row);
+            got.push(row);
+        }
+        assert_eq!(got, vec![vec![0, 0, 0], vec![0, 0, 0]]);
+    }
+
+    // np.random.default_rng(42).multivariate_hypergeometric([16, 8, 4], 6)
+    // -> [6, 0, 0]  (single draw, num_colors=3 -> 2 hypergeometric trips)
+    #[test]
+    fn mvhg_marginals_single_draw_seed42() {
+        let mut bg = pcg64(42);
+        let colors = [16i64, 8, 4];
+        let total: i64 = colors.iter().sum();
+        let mut out = vec![0i64; 3];
+        multivariate_hypergeometric_marginals(&mut bg, total, &colors, 6, &mut out);
+        assert_eq!(out, vec![6, 0, 0]);
+    }
+
+    // np.random.default_rng(42).multivariate_hypergeometric([16, 8, 4], 6,
+    // size=7) -> [[6,0,0],[4,2,0],[4,1,1],[4,1,1],[3,3,0],[2,2,2],[3,2,1]]
+    // -- same (seed, colors, nsample) as the size=1 case above, re-drawn 7
+    // times from one continuing bit stream (trip counts 1 and 7 in one
+    // corpus, per the data-dependent-loop-trip-count trap).
+    #[test]
+    fn mvhg_marginals_many_draws_seed42() {
+        let mut bg = pcg64(42);
+        let colors = [16i64, 8, 4];
+        let total: i64 = colors.iter().sum();
+        let mut got = Vec::new();
+        for _ in 0..7 {
+            let mut row = vec![0i64; 3];
+            multivariate_hypergeometric_marginals(&mut bg, total, &colors, 6, &mut row);
+            got.push(row);
+        }
+        assert_eq!(
+            got,
+            vec![
+                vec![6, 0, 0],
+                vec![4, 2, 0],
+                vec![4, 1, 1],
+                vec![4, 1, 1],
+                vec![3, 3, 0],
+                vec![2, 2, 2],
+                vec![3, 2, 1],
+            ]
+        );
+    }
+
+    // np.random.default_rng(42).multivariate_hypergeometric([16, 8, 4], 25,
+    // size=5) -- nsample=25 > total/2=14, exercises the `more_than_half`
+    // complement branch (draws for total-nsample=3 internally, then
+    // out[k] = colors[k] - out[k]).
+    #[test]
+    fn mvhg_marginals_more_than_half_seed42() {
+        let mut bg = pcg64(42);
+        let colors = [16i64, 8, 4];
+        let total: i64 = colors.iter().sum();
+        let mut got = Vec::new();
+        for _ in 0..5 {
+            let mut row = vec![0i64; 3];
+            multivariate_hypergeometric_marginals(&mut bg, total, &colors, 25, &mut row);
+            got.push(row);
+        }
+        assert_eq!(
+            got,
+            vec![
+                vec![13, 8, 4],
+                vec![13, 8, 4],
+                vec![13, 8, 4],
+                vec![14, 7, 4],
+                vec![13, 8, 4],
+            ]
+        );
+    }
+
+    // np.random.default_rng(42).multivariate_hypergeometric([16, 8, 4], 0,
+    // size=3) -> all-zero rows -- `nsample == 0` early-return.
+    #[test]
+    fn mvhg_marginals_nsample_zero_seed42() {
+        let mut bg = pcg64(42);
+        let colors = [16i64, 8, 4];
+        let total: i64 = colors.iter().sum();
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            let mut row = vec![0i64; 3];
+            multivariate_hypergeometric_marginals(&mut bg, total, &colors, 0, &mut row);
+            got.push(row);
+        }
+        assert_eq!(got, vec![vec![0, 0, 0]; 3]);
+    }
+
+    // np.random.default_rng(42).multivariate_hypergeometric([10], 5,
+    // size=3) -> [[5],[5],[5]]  -- num_colors=1: the `for j in
+    // 0..num_colors-1` draw loop never runs (0 iterations), the entire
+    // nsample goes straight to `out[num_colors-1]` unconditionally.
+    #[test]
+    fn mvhg_marginals_single_color_seed42() {
+        let mut bg = pcg64(42);
+        let colors = [10i64];
+        let total: i64 = colors.iter().sum();
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            let mut row = vec![0i64; 1];
+            multivariate_hypergeometric_marginals(&mut bg, total, &colors, 5, &mut row);
+            got.push(row);
+        }
+        assert_eq!(got, vec![vec![5]; 3]);
+    }
+
+    // np.random.default_rng(42).multivariate_hypergeometric([12, 20], 15,
+    // size=5) -> [[5,10],[6,9],[7,8],[4,11],[7,8]]  -- num_colors=2.
+    #[test]
+    fn mvhg_marginals_two_color_seed42() {
+        let mut bg = pcg64(42);
+        let colors = [12i64, 20];
+        let total: i64 = colors.iter().sum();
+        let mut got = Vec::new();
+        for _ in 0..5 {
+            let mut row = vec![0i64; 2];
+            multivariate_hypergeometric_marginals(&mut bg, total, &colors, 15, &mut row);
+            got.push(row);
+        }
+        assert_eq!(got, vec![vec![5, 10], vec![6, 9], vec![7, 8], vec![4, 11], vec![7, 8]]);
+    }
+
+    // np.random.default_rng(42): arr = arange(10); g.shuffle(arr) ->
+    // [5, 6, 0, 7, 3, 2, 4, 9, 1, 8]. `_shuffle_raw`'s masked-rejection
+    // primitive (`random_interval`), NOT Lemire.
+    #[test]
+    fn shuffle_masked_len10_seed42() {
+        let mut bg = pcg64(42);
+        let mut data: Vec<i64> = (0..10).collect();
+        shuffle_masked(&mut bg, &mut data);
+        assert_eq!(data, vec![5, 6, 0, 7, 3, 2, 4, 9, 1, 8]);
+    }
+
+    // np.random.default_rng(42): arange(1), shuffle -> [0] (n=1: loop
+    // range (1..1) is empty, zero draws, no panic).
+    #[test]
+    fn shuffle_masked_len1_seed42() {
+        let mut bg = pcg64(42);
+        let mut data: Vec<i64> = vec![0];
+        shuffle_masked(&mut bg, &mut data);
+        assert_eq!(data, vec![0]);
+    }
+
+    // np.random.default_rng(42): arange(0), shuffle -> [] (empty, no-op,
+    // no panic on the `n == 0` early return).
+    #[test]
+    fn shuffle_masked_len0_seed42() {
+        let mut bg = pcg64(42);
+        let mut data: Vec<i64> = vec![];
+        shuffle_masked(&mut bg, &mut data);
+        assert_eq!(data, Vec::<i64>::new());
+    }
+
+    // np.random.default_rng(7): arange(6), shuffle -> [5, 2, 0, 4, 1, 3].
+    // Different seed from the len10/len1/len0 cases above so this isn't
+    // just re-testing the same PCG64 stream position.
+    #[test]
+    fn shuffle_masked_len6_seed7() {
+        let mut bg = pcg64(7);
+        let mut data: Vec<i64> = (0..6).collect();
+        shuffle_masked(&mut bg, &mut data);
+        assert_eq!(data, vec![5, 2, 0, 4, 1, 3]);
+    }
+
+    // np.random.default_rng(42).choice(20, size=5, replace=False,
+    // shuffle=False) -> [1, 13, 11, 8, 19]. Floyd's-algorithm branch
+    // (pop_size=20 is far below the 10000 tail-shuffle threshold),
+    // shuffle=False so the FINAL `shuffle_lemire(out, 1)` pass is
+    // skipped -- this is the raw Floyd insertion order.
+    #[test]
+    fn choice_no_replace_no_p_floyd_noshuffle_seed42() {
+        let mut bg = pcg64(42);
+        let out = choice_no_replace_no_p(&mut bg, 20, 5, false);
+        assert_eq!(out, vec![1, 13, 11, 8, 19]);
+    }
+
+    // np.random.default_rng(42).choice(20, size=5, replace=False) (default
+    // shuffle=True) -> [13, 8, 11, 1, 19]. Same Floyd draws as the
+    // no-shuffle case above, but with the extra `shuffle_lemire(out, 1)`
+    // final pass applied -- confirms that pass is wired in and consumes
+    // its OWN additional bit-stream draws (a value-only comparison against
+    // the noshuffle case could pass by coincidence; this checks the
+    // actual numpy-captured permutation of the same 5 values).
+    #[test]
+    fn choice_no_replace_no_p_floyd_shuffle_seed42() {
+        let mut bg = pcg64(42);
+        let out = choice_no_replace_no_p(&mut bg, 20, 5, true);
+        assert_eq!(out, vec![13, 8, 11, 1, 19]);
+    }
+
+    // np.random.default_rng(42).choice(20000, size=1000,
+    // replace=False)[:10] -> [9742, 18275, 6853, 10003, 11897, 10066,
+    // 8199, 3744, 10438, 6514]. pop_size=20000 > 10000 AND size=1000 >
+    // 20000/50=400 -- the "tail shuffle" branch, NOT Floyd's algorithm.
+    // If the branch condition were wrong (e.g. off-by-one on the cutoff),
+    // this would silently fall through to Floyd's algorithm instead and
+    // produce different values from a different draw sequence.
+    #[test]
+    fn choice_no_replace_no_p_tail_shuffle_seed42() {
+        let mut bg = pcg64(42);
+        let out = choice_no_replace_no_p(&mut bg, 20000, 1000, true);
+        assert_eq!(&out[..10], &[9742, 18275, 6853, 10003, 11897, 10066, 8199, 3744, 10438, 6514]);
+        assert_eq!(out.len(), 1000);
     }
 }

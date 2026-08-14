@@ -1,7 +1,7 @@
 # Known differences from numpy
 
 This file tracks every place `anionpy` deliberately behaves differently from
-(or is a strict subset of) numpy, per project rule: differences must
+(or is a strict subset of) numpy, per GOAL-ionp.md's rule: differences must
 be written down, not hidden. This is not a bug list — items here are
 intentional scope cuts or documented behavioral choices in the ndarray core
 built in this pass (dtype system, array/view mechanics, broadcasting, the
@@ -22,7 +22,8 @@ ufunc engine, and the PyO3 vertical slice: `array`, `.shape`, `.dtype`,
   Boolean-mask indexing, integer-array ("fancy") indexing, and `Ellipsis`/
   `np.newaxis` are not implemented and raise `TypeError` from
   `__getitem__`.
-- **No buffer-protocol / PEP 3118 export.** Interop with numpy goes through
+- **Pickle protocol (2026-08-13):** `ndarray` implements `__reduce__` / `__reduce_ex__` / `__getstate__` / `__setstate__`. Values round-trip. Reconstruct callable is `anionpy._reconstruct_ndarray`, not numpy's.
+- **Buffer protocol (2026-08-13):** `ndarray.__buffer__` returns a typed shaped `memoryview` of `tobytes()` for real/bool (and empty 1-D). Complex and empty N-D raise `TypeError` so `np.asarray` uses `__array__`. Not zero-copy of the live Rust buffer; not writable. Interop with numpy goes through
   `__array__` only (materializes a C-contiguous copy on demand via
   `to_contiguous()` then `into_pyarray()`). A zero-copy `__buffer__`/
   `Py_buffer` export is future work.

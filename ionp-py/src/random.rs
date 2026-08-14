@@ -15,10 +15,14 @@
 //! 2.5.1 instantiates plain `PCG64` (XSL-RR), NOT `PCG64DXSM`. So
 //! `default_rng` here binds to `Pcg64`, not `Pcg64Dxsm`.
 //!
-//! NOT implemented (out of scope for this pass, see the task's final
-//! report): every distribution beyond the uniform-double/bounded-integer
-//! paths (`.random`/`.integers`/`.bytes`), `.choice`/`.permutation`/
-//! `.shuffle`/`.permuted`, MT19937/Philox/SFC64, legacy `RandomState`.
+//! `SFC64` (2026-08-13, this session) is wired the same way as `PCG64`/
+//! `PCG64DXSM`: its own `#[pyclass]`, its own `BitGenKind::Sfc64` variant,
+//! accepted by `Generator.__init__`. `MT19937`/`Philox` remain NOT
+//! implemented -- measured this session (numpy's own C source for both is
+//! locally cached and reads as tractable, same `BitGen64` trait shape) but
+//! not attempted, a scope/time deferral, not a bit-exactness decline --
+//! see the task's final report. Legacy `RandomState` (~45 methods) is also
+//! not implemented.
 //! `SeedSequence`'s `entropy=` argument only accepts a single Python int
 //! (or `None`, which falls back to non-reproducible OS-ish entropy) --
 //! numpy's own richer `_coerce_to_uint32_array` also accepts strings and
@@ -32,10 +36,52 @@ use pyo3::prelude::*;
 use pyo3::types::PyFloat;
 use pyo3::IntoPyObjectExt;
 
-use ionp_core::random::{bounded, discrete, distributions, BitGen64, Pcg64, Pcg64Dxsm, SeedSequence};
-use ionp_core::{Buffer, DType, NdArray, Order};
+use ionp_core::random::{bounded, discrete, distributions, BitGen64, Pcg64, Pcg64Dxsm, SeedSequence, Sfc64};
+use ionp_core::{manip, Buffer, DType, NdArray, Order};
 
 use crate::{dtype_from_pyobj, to_py_err, PyArray};
+
+/// Same pattern as `creation.rs`/`manip.rs`/etc.'s own private
+/// `extract_or_ingest_ndarray` (duplicated per-file rather than shared,
+/// matching this codebase's existing convention): accept either an
+/// existing `PyArray` (cloned, cheap -- `NdArray` clone is a buffer `Arc`
+/// bump) or ingest a Python sequence/scalar through `array_impl`.
+fn extract_or_ingest_ndarray(obj: &Bound<'_, PyAny>) -> PyResult<NdArray> {
+    if let Ok(pyref) = obj.extract::<PyRef<'_, PyArray>>() {
+        return Ok(pyref.inner.clone());
+    }
+    crate::array_impl(obj, None)
+}
+
+/// In-place Fisher-Yates shuffle of a `Buffer`'s elements along its outer
+/// (only, for the 1-D case this is scoped to) axis, dispatching to
+/// `discrete::shuffle_masked` for every concrete element type `Buffer`
+/// can hold. `shuffle_masked<T>` has no `Copy`/`Clone` bound (it uses
+/// `<[T]>::swap`, not element duplication), so this covers the fixed-width
+/// string variants (`S`/`U`, each `Vec<Vec<u8|u32>>`) for free alongside
+/// every numeric variant -- no dtype is out of scope for `shuffle` itself
+/// (unlike `choice`, which only returns/reindexes, or the continuous
+/// distributions, which are numeric-only by nature).
+fn shuffle_buffer_masked(bg: &mut dyn BitGen64, buf: &mut Buffer) {
+    match buf {
+        Buffer::Bool(v) => discrete::shuffle_masked(bg, v),
+        Buffer::I8(v) => discrete::shuffle_masked(bg, v),
+        Buffer::I16(v) => discrete::shuffle_masked(bg, v),
+        Buffer::I32(v) => discrete::shuffle_masked(bg, v),
+        Buffer::I64(v) => discrete::shuffle_masked(bg, v),
+        Buffer::U8(v) => discrete::shuffle_masked(bg, v),
+        Buffer::U16(v) => discrete::shuffle_masked(bg, v),
+        Buffer::U32(v) => discrete::shuffle_masked(bg, v),
+        Buffer::U64(v) => discrete::shuffle_masked(bg, v),
+        Buffer::F16(v) => discrete::shuffle_masked(bg, v),
+        Buffer::F32(v) => discrete::shuffle_masked(bg, v),
+        Buffer::F64(v) => discrete::shuffle_masked(bg, v),
+        Buffer::C64(v) => discrete::shuffle_masked(bg, v),
+        Buffer::C128(v) => discrete::shuffle_masked(bg, v),
+        Buffer::S(_, v) => discrete::shuffle_masked(bg, v),
+        Buffer::U(_, v) => discrete::shuffle_masked(bg, v),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Seed / entropy coercion.
@@ -141,6 +187,16 @@ fn pcg64dxsm_from_seed(seed: Option<&Bound<'_, PyAny>>) -> PyResult<Pcg64Dxsm> {
     Ok(Pcg64Dxsm::from_seed_words([w[0], w[1], w[2], w[3]]))
 }
 
+/// `SFC64.__init__`: `self._seed_seq.generate_state(3, np.uint64)`, unlike
+/// `PCG64`/`PCG64DXSM`'s 4 words -- confirmed from `_sfc64.pyx` directly
+/// (see `ionp_core::random::sfc64`'s module docs), not assumed by analogy.
+fn sfc64_from_seed(seed: Option<&Bound<'_, PyAny>>) -> PyResult<Sfc64> {
+    let words = entropy_words_for_seed(seed)?;
+    let seq = SeedSequence::new(&words, &[], 4);
+    let w = seq.generate_state_u64(3);
+    Ok(Sfc64::from_seed_words([w[0], w[1], w[2]]))
+}
+
 // ---------------------------------------------------------------------------
 // `size=` parsing, shared by `SeedSequence.generate_state`/`PCG64.random_raw`/
 // `Generator.random`/`Generator.integers`.
@@ -174,6 +230,7 @@ fn shape_from_size_arg(obj: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
 enum BitGenKind {
     Pcg64(Pcg64),
     Pcg64Dxsm(Pcg64Dxsm),
+    Sfc64(Sfc64),
 }
 
 impl BitGen64 for BitGenKind {
@@ -181,12 +238,14 @@ impl BitGen64 for BitGenKind {
         match self {
             BitGenKind::Pcg64(bg) => bg.next_u64(),
             BitGenKind::Pcg64Dxsm(bg) => bg.next_u64(),
+            BitGenKind::Sfc64(bg) => bg.next_u64(),
         }
     }
     fn next_u32(&mut self) -> u32 {
         match self {
             BitGenKind::Pcg64(bg) => bg.next_u32(),
             BitGenKind::Pcg64Dxsm(bg) => bg.next_u32(),
+            BitGenKind::Sfc64(bg) => bg.next_u32(),
         }
     }
 }
@@ -280,6 +339,35 @@ impl PyPCG64DXSM {
     #[pyo3(signature = (seed=None))]
     fn new(seed: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
         Ok(Self { inner: pcg64dxsm_from_seed(seed)? })
+    }
+
+    #[pyo3(signature = (size=None))]
+    fn random_raw(&mut self, py: Python<'_>, size: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyAny>> {
+        match size {
+            None => self.inner.next_u64().into_py_any(py),
+            Some(obj) => {
+                let shape = shape_from_size_arg(obj)?;
+                let n: usize = shape.iter().product();
+                let data: Vec<u64> = (0..n).map(|_| self.inner.next_u64()).collect();
+                let inner = NdArray::from_buffer(Buffer::U64(data), shape, Order::C).map_err(to_py_err)?;
+                Py::new(py, PyArray { inner })?.into_py_any(py)
+            }
+        }
+    }
+}
+
+#[pyclass(name = "SFC64", module = "anionpy.random", skip_from_py_object)]
+#[derive(Clone)]
+struct PySFC64 {
+    inner: Sfc64,
+}
+
+#[pymethods]
+impl PySFC64 {
+    #[new]
+    #[pyo3(signature = (seed=None))]
+    fn new(seed: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        Ok(Self { inner: sfc64_from_seed(seed)? })
     }
 
     #[pyo3(signature = (size=None))]
@@ -638,7 +726,10 @@ impl PyGenerator {
         if let Ok(bg) = bit_generator.extract::<PyRef<'_, PyPCG64DXSM>>() {
             return Ok(Self { bg: BitGenKind::Pcg64Dxsm(bg.inner.clone()) });
         }
-        Err(PyTypeError::new_err("bit_generator must be a PCG64 or PCG64DXSM instance"))
+        if let Ok(bg) = bit_generator.extract::<PyRef<'_, PySFC64>>() {
+            return Ok(Self { bg: BitGenKind::Sfc64(bg.inner.clone()) });
+        }
+        Err(PyTypeError::new_err("bit_generator must be a PCG64, PCG64DXSM, or SFC64 instance"))
     }
 
     /// `Generator.random(size=None, dtype=np.float64, out=None)`. `out=`
@@ -1057,6 +1148,504 @@ impl PyGenerator {
         check_non_negative("nsample", lnsample as f64)?;
         emit_i64(py, &mut self.bg, size, |bg| discrete::hypergeometric(bg, lngood, lnbad, lnsample))
     }
+
+    /// `Generator.dirichlet(alpha, size=None)`, scoped to the common
+    /// non-broadcast call form: `alpha` a 1-D sequence of floats, `size`
+    /// `None`/int/tuple-of-int (matches `linalg.svd`'s already-accepted
+    /// precedent of declaring a non-batched subset -- see
+    /// `anionpy/_state/linalg.py`). Output shape `(k,)` if `size is None`
+    /// else `size + (k,)` (as a tuple), matching `_generator.pyx` exactly.
+    ///
+    /// Constraint: `alpha < 0` anywhere raises `ValueError('alpha < 0')`
+    /// (transcribed verbatim -- this is NOT `CONS_POSITIVE`; zero entries
+    /// are allowed, unlike `beta`'s own scalar `a`/`b`).
+    ///
+    /// Algorithm selection (`alpha.iter().max() < 0.1`) is computed ONCE
+    /// per call, matching numpy's own control flow (see
+    /// `distributions::dirichlet_sample`'s doc comment) -- NOT per draw.
+    #[pyo3(signature = (alpha, size=None))]
+    fn dirichlet(
+        &mut self,
+        py: Python<'_>,
+        alpha: Vec<f64>,
+        size: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let k = alpha.len();
+        if alpha.iter().any(|&a| a < 0.0) {
+            return Err(PyValueError::new_err("alpha < 0"));
+        }
+        let use_small_alpha = k > 0
+            && alpha.iter().cloned().fold(f64::MIN, f64::max) < distributions::DIRICHLET_SMALL_ALPHA_THRESHOLD;
+
+        let mut out_shape: Vec<usize> = match size {
+            None => vec![],
+            Some(obj) => shape_from_size_arg(obj)?,
+        };
+        out_shape.push(k);
+        let total_draws: usize = out_shape[..out_shape.len() - 1].iter().product();
+
+        let mut data = vec![0.0f64; total_draws * k];
+        // k == 0 (empty `alpha`): numpy returns an all-empty array of shape
+        // `size + (0,)` without drawing anything -- `chunks_mut(0)` panics
+        // ("chunk size must be non-zero"), so skip the draw loop entirely
+        // rather than attempt zero-width chunking.
+        if k > 0 {
+            for chunk in data.chunks_mut(k) {
+                distributions::dirichlet_sample(&mut self.bg, &alpha, use_small_alpha, chunk);
+            }
+        }
+        let inner = NdArray::from_buffer(Buffer::F64(data), out_shape, Order::C).map_err(to_py_err)?;
+        Py::new(py, PyArray { inner })?.into_py_any(py)
+    }
+
+    /// `Generator.multinomial(n, pvals, size=None)`, scoped to the common
+    /// non-broadcast call form: `n` a scalar int, `pvals` a 1-D sequence
+    /// of floats, `size` `None`/int/tuple-of-int (`n` as array-like /
+    /// `pvals` with ndim > 1 broadcasting is the documented-but-
+    /// unsupported form, same scoping precedent as `dirichlet` above).
+    /// Output shape `(d,)` if `size is None` else `size + (d,)`.
+    ///
+    /// Constraint order (transcribed from `_generator.pyx`): (1) `pvals`
+    /// elementwise `CONS_BOUNDED_0_1` (`"pvals < 0, pvals > 1 or pvals is
+    /// NaN"` per-element, `_check_array_cons_bounded_0_1`'s scalar-style
+    /// message, not the array-style `CONS_NON_NEGATIVE` message), (2)
+    /// `kahan_sum(pvals[:-1]) > 1.0 + 1e-12` -> `ValueError("sum(pvals[:-1])
+    /// > 1.0")`, (3) `n` `CONS_NON_NEGATIVE` (`"n < 0"`). The loop trip
+    /// count is `total_output_size / d` and is data-dependent (`size`) --
+    /// see `discrete::multinomial`'s own doc comment for the per-draw
+    /// algorithm, unchanged here.
+    #[pyo3(signature = (n, pvals, size=None))]
+    fn multinomial(
+        &mut self,
+        py: Python<'_>,
+        n: i64,
+        pvals: Vec<f64>,
+        size: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let d = pvals.len();
+        if d == 0 {
+            return Err(PyValueError::new_err(
+                "pvals must have at least 1 dimension and the last dimension of pvals must be greater than 0.",
+            ));
+        }
+        for &p in &pvals {
+            if !(p >= 0.0) || !(p <= 1.0) {
+                // Array-path CONS_BOUNDED_0_1 message text differs from the
+                // scalar path's ("is NaN" vs "contains NaNs") --
+                // `_check_array_cons_bounded_0_1` in `_common.pyx`.
+                return Err(PyValueError::new_err("pvals < 0, pvals > 1 or pvals contains NaNs"));
+            }
+        }
+        // Kahan-compensated sum of pvals[..d-1], matching `_common.pyx`'s
+        // `kahan_sum` bit-for-bit (see `distributions.rs`'s FMA-contraction
+        // lesson -- this loop has none: every step is already a separate,
+        // non-fusable C expression in the original).
+        if d > 1 {
+            let mut sum = pvals[0];
+            let mut c = 0.0f64;
+            for &x in &pvals[1..d - 1] {
+                let y = x - c;
+                let t = sum + y;
+                c = (t - sum) - y;
+                sum = t;
+            }
+            if sum > 1.0 + 1e-12 {
+                return Err(PyValueError::new_err("sum(pvals[:-1]) > 1.0"));
+            }
+        }
+        check_non_negative("n", n as f64)?;
+
+        let mut out_shape: Vec<usize> = match size {
+            None => vec![],
+            Some(obj) => shape_from_size_arg(obj)?,
+        };
+        out_shape.push(d);
+        let total_draws: usize = out_shape[..out_shape.len() - 1].iter().product();
+
+        let mut data = vec![0i64; total_draws * d];
+        for chunk in data.chunks_mut(d) {
+            discrete::multinomial(&mut self.bg, n, &pvals, chunk);
+        }
+        let inner = NdArray::from_buffer(Buffer::I64(data), out_shape, Order::C).map_err(to_py_err)?;
+        Py::new(py, PyArray { inner })?.into_py_any(py)
+    }
+
+    /// `Generator.multivariate_hypergeometric(colors, nsample, size=None,
+    /// method='marginals')`, scoped to `method='marginals'` (numpy's
+    /// DEFAULT) ONLY -- `method='count'` is a real, numpy-successful,
+    /// STATISTICALLY DIFFERENT algorithm (temp array of size
+    /// `sum(colors)`, distinct draw order) that this binding does not
+    /// implement; rather than silently return marginals-shaped output for
+    /// a caller who explicitly asked for 'count' (a silent wrong-answer,
+    /// the exact failure mode this whole task exists to prevent), an
+    /// explicit `method='count'` raises `NotImplementedError` loudly. A
+    /// genuinely invalid method string still raises numpy's own exact
+    /// `ValueError` message, since that check is free and matches
+    /// real numpy's own validation ORDER (method checked before nsample,
+    /// before colors -- transcribed from `_generator.pyx`).
+    ///
+    /// Constraint order (transcribed from `_generator.pyx`): (1) `method`
+    /// membership, (2) `nsample` `CONS_NON_NEGATIVE`
+    /// (`"nsample must be nonnegative."`), (3) `colors` 1-D nonnegative
+    /// `int64`-range check, (4) `sum(colors)` overflow check, (5)
+    /// `method == 'marginals'` -> `sum(colors) < 1_000_000_000` check
+    /// (the ONLY total-size ceiling that applies to this binding's
+    /// scoped-in method), (6) `nsample > sum(colors)` check. See
+    /// `discrete::multivariate_hypergeometric_marginals`'s own doc
+    /// comment for the per-draw algorithm (built on the existing
+    /// `discrete::hypergeometric`, already bit-exact-verified).
+    #[pyo3(signature = (colors, nsample, size=None, method=None))]
+    fn multivariate_hypergeometric(
+        &mut self,
+        py: Python<'_>,
+        colors: Vec<i64>,
+        nsample: i64,
+        size: Option<&Bound<'_, PyAny>>,
+        method: Option<&str>,
+    ) -> PyResult<Py<PyAny>> {
+        match method {
+            None | Some("marginals") => {}
+            Some("count") => {
+                return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                    "multivariate_hypergeometric(method='count') is not implemented; only the default method='marginals' is scoped in",
+                ));
+            }
+            Some(_) => {
+                return Err(PyValueError::new_err("method must be \"count\" or \"marginals\"."));
+            }
+        }
+        if nsample < 0 {
+            return Err(PyValueError::new_err("nsample must be nonnegative."));
+        }
+
+        let num_colors = colors.len();
+        if colors.iter().any(|&c| c < 0) {
+            return Err(PyValueError::new_err(
+                "colors must be a one-dimensional sequence of nonnegative integers not exceeding 9223372036854775807.",
+            ));
+        }
+        let mut total: i64 = 0;
+        for &c in &colors {
+            total = total.checked_add(c).ok_or_else(|| {
+                PyValueError::new_err(
+                    "sum(colors) must not exceed the maximum value of a 64 bit signed integer (9223372036854775807)",
+                )
+            })?;
+        }
+        if total >= 1_000_000_000 {
+            return Err(PyValueError::new_err(
+                "When method is \"marginals\", sum(colors) must be less than 1000000000.",
+            ));
+        }
+        if nsample > total {
+            return Err(PyValueError::new_err("nsample > sum(colors)"));
+        }
+
+        let mut out_shape: Vec<usize> = match size {
+            None => vec![],
+            Some(obj) => shape_from_size_arg(obj)?,
+        };
+        out_shape.push(num_colors);
+        let total_draws: usize = out_shape[..out_shape.len() - 1].iter().product();
+
+        let mut data = vec![0i64; total_draws * num_colors];
+        // num_colors == 0: numpy returns an all-empty array of shape
+        // `size + (0,)` without drawing anything -- same empty-chunk
+        // panic hazard `dirichlet`'s k=0 fix already addressed, guarded
+        // the same way here.
+        if num_colors > 0 {
+            for chunk in data.chunks_mut(num_colors) {
+                discrete::multivariate_hypergeometric_marginals(&mut self.bg, total, &colors, nsample, chunk);
+            }
+        }
+        let inner = NdArray::from_buffer(Buffer::I64(data), out_shape, Order::C).map_err(to_py_err)?;
+        Py::new(py, PyArray { inner })?.into_py_any(py)
+    }
+
+    // -----------------------------------------------------------------
+    // `shuffle`/`permutation`/`permuted`/`choice`: the index/sequence
+    // family built on `discrete::shuffle_masked`/`shuffle_lemire`/
+    // `choice_no_replace_no_p` (see those functions' own doc comments in
+    // `ionp-core/src/random/discrete.rs` for the numpy-source-derived
+    // algorithm detail, and `bounded.rs`'s module doc for why
+    // `shuffle`/`permutation`/`permuted` draw via the MASKED primitive
+    // while `choice`'s own no-replace path draws via Lemire -- two
+    // genuinely distinct bit-stream consumers, not a stylistic choice).
+    //
+    // Scoped IN this pass: 1-D `anionpy.ndarray`/int input for all four;
+    // `choice`'s `replace=True` (both `p=None` and `p` given) and
+    // `replace=False, p=None` branches.
+    //
+    // Scoped OUT, loudly (`NotImplementedError`, never a silent
+    // wrong answer): any ndim != 1 input to `shuffle`/`permutation`
+    // (numpy shuffles/permutes along `axis` by swapping whole
+    // cross-sections there, a different algorithm this pass didn't
+    // transcribe); `permuted(axis=...)` and `permuted(out=...)` (only
+    // `axis=None`, no `out`, is scoped in -- flatten, shuffle the flat
+    // buffer via a fresh C-contiguous copy, keep the original shape
+    // metadata); `choice`'s `replace=False, p=...` branch (numpy's own
+    // algorithm there is an iterative `np.unique`+`searchsorted`
+    // rejection loop whose bit-exactness this pass did not have time to
+    // verify). Declining these is a deliberate, documented decision, not
+    // an oversight -- see the coordinator's own framing: a decline is a
+    // success, not a shortfall.
+    // -----------------------------------------------------------------
+
+    /// `Generator.shuffle(x, axis=0)`, in-place. `x` must be an
+    /// `anionpy.ndarray` (a raw Python list/foreign array has no storage
+    /// this could mutate through -- same established precedent as
+    /// `put`/`put_along_axis` in `manip.rs`).
+    #[pyo3(signature = (x, axis=0))]
+    fn shuffle(&mut self, x: &Bound<'_, PyAny>, axis: isize) -> PyResult<()> {
+        let bound = x
+            .cast::<PyArray>()
+            .map_err(|_| PyTypeError::new_err("shuffle() requires an anionpy.ndarray as its in-place mutation target"))?;
+        let mut pyref = bound.borrow_mut();
+        if pyref.inner.ndim() != 1 {
+            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                "Generator.shuffle() on an array with ndim != 1 is not implemented; only whole 1-D shuffling is scoped in",
+            ));
+        }
+        // 1-D only, so the only legal `axis` values are 0/-1 -- this both
+        // validates that and matches numpy's own `axis` bounds-check
+        // message shape for a bad value.
+        manip::normalize_axis(axis, 1).map_err(to_py_err)?;
+        shuffle_buffer_masked(&mut self.bg, pyref.inner.buffer_mut());
+        Ok(())
+    }
+
+    /// `Generator.permutation(x, axis=0)`. `x` as a non-negative Python
+    /// int draws `shuffle(arange(x))` (matching numpy's own int branch:
+    /// `arr = arange(x); self.shuffle(arr); return arr`, so it uses this
+    /// SAME masked primitive, not `choice`'s Lemire one). `x` as a 1-D
+    /// `anionpy.ndarray`/sequence returns a shuffled COPY -- the input is
+    /// left untouched, unlike `shuffle`.
+    #[pyo3(signature = (x, axis=0))]
+    fn permutation(&mut self, py: Python<'_>, x: &Bound<'_, PyAny>, axis: isize) -> PyResult<Py<PyAny>> {
+        if let Ok(n) = x.extract::<i64>() {
+            if n < 0 {
+                return Err(PyValueError::new_err("x must be a non-negative integer"));
+            }
+            let mut idx: Vec<i64> = (0..n).collect();
+            discrete::shuffle_masked(&mut self.bg, &mut idx);
+            let inner = NdArray::from_buffer(Buffer::I64(idx), vec![n as usize], Order::C).map_err(to_py_err)?;
+            return Py::new(py, PyArray { inner })?.into_py_any(py);
+        }
+        let arr = extract_or_ingest_ndarray(x)?;
+        if arr.ndim() != 1 {
+            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                "Generator.permutation() on an array with ndim != 1 is not implemented; only 1-D permutation is scoped in",
+            ));
+        }
+        manip::normalize_axis(axis, 1).map_err(to_py_err)?;
+        // `to_contiguous_order` always gathers into a FRESH, uniquely-owned
+        // buffer (`array.rs`'s `gather_by_perm`), never aliasing `arr`'s own
+        // storage -- exactly the "copy, then shuffle in place" numpy does.
+        let mut copy = arr.to_contiguous_order("C").map_err(to_py_err)?;
+        shuffle_buffer_masked(&mut self.bg, copy.buffer_mut());
+        Py::new(py, PyArray { inner: copy })?.into_py_any(py)
+    }
+
+    /// `Generator.permuted(x, axis=None, out=None)`, scoped to
+    /// `axis=None` (numpy flattens `x`, shuffles the flat sequence, and
+    /// reshapes back to `x`'s original shape) with no `out=` support.
+    /// `axis=k` independently shuffles every slice perpendicular to
+    /// `axis` -- a real, distinct algorithm this pass didn't have time to
+    /// transcribe and verify, so it is declined loudly.
+    #[pyo3(signature = (x, axis=None, out=None))]
+    fn permuted(
+        &mut self,
+        py: Python<'_>,
+        x: &Bound<'_, PyAny>,
+        axis: Option<isize>,
+        out: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        if axis.is_some() {
+            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                "Generator.permuted(axis=...) is not implemented; only axis=None (flatten + shuffle + reshape) is scoped in",
+            ));
+        }
+        if out.is_some() {
+            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                "Generator.permuted(out=...) is not implemented",
+            ));
+        }
+        let arr = extract_or_ingest_ndarray(x)?;
+        // Fresh, uniquely-owned C-contiguous buffer (same `gather_by_perm`
+        // guarantee `permutation` relies on above) with `arr`'s ORIGINAL
+        // shape preserved -- shuffling this buffer's raw storage in place
+        // is exactly "flatten, shuffle the flat sequence, reshape back",
+        // since the flat storage IS the flattened sequence and the shape
+        // metadata is untouched.
+        let mut flat = arr.to_contiguous_order("C").map_err(to_py_err)?;
+        shuffle_buffer_masked(&mut self.bg, flat.buffer_mut());
+        Py::new(py, PyArray { inner: flat })?.into_py_any(py)
+    }
+
+    /// `Generator.choice(a, size=None, replace=True, p=None, axis=0,
+    /// shuffle=True)`. `a` as a non-negative int or a 1-D
+    /// `anionpy.ndarray`/sequence; N-D `a` is out of scope (see the
+    /// family doc comment above `shuffle`). `replace=False, p=...` is
+    /// out of scope and raises loudly -- see the family doc comment.
+    ///
+    /// `p`'s validation (1-D length match, Kahan-summed
+    /// NaN/non-negative/sums-to-1-within-`atol` checks) mirrors
+    /// `multinomial`'s own Kahan-sum block above, with one real
+    /// difference: `multinomial` sums only `pvals[..d-1]` (the last
+    /// probability there is implied), while `choice`'s `kahan_sum` sums
+    /// ALL `d` probabilities (`_generator.pyx`'s `p_sum = kahan_sum(pix,
+    /// d)`) -- transcribed faithfully, not copy-pasted. One documented
+    /// simplification: numpy widens `atol` when `p`'s ORIGINAL array
+    /// dtype is a lower-precision float (`max(atol,
+    /// sqrt(finfo(p.dtype).eps))`); since `p` is ingested here as a plain
+    /// `Vec<f64>` with no source-dtype tracking, that widening is NOT
+    /// applied -- `atol` is always `sqrt(f64::EPSILON)`. A caller who
+    /// passes a float32 `p` deliberately right at the wider-but-not-the-
+    /// narrower tolerance boundary would see a stricter accept/reject
+    /// than real numpy; this is a real, narrow, documented gap, not
+    /// silent handling.
+    #[pyo3(signature = (a, size=None, replace=true, p=None, axis=0, shuffle=true))]
+    #[allow(clippy::too_many_arguments)]
+    fn choice(
+        &mut self,
+        py: Python<'_>,
+        a: &Bound<'_, PyAny>,
+        size: Option<&Bound<'_, PyAny>>,
+        replace: bool,
+        p: Option<&Bound<'_, PyAny>>,
+        axis: isize,
+        shuffle: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let is_scalar = size.is_none();
+        let out_shape: Vec<usize> = match size {
+            None => vec![],
+            Some(obj) => shape_from_size_arg(obj)?,
+        };
+        let total_size: i64 = if is_scalar { 1 } else { out_shape.iter().product::<usize>() as i64 };
+
+        let (pop_size, a_is_int, a_arr): (i64, bool, Option<NdArray>) = if let Ok(v) = a.extract::<i64>() {
+            if v <= 0 && total_size != 0 {
+                return Err(PyValueError::new_err("a must be a positive integer unless no samples are taken"));
+            }
+            (v, true, None)
+        } else {
+            let arr = extract_or_ingest_ndarray(a)?;
+            if arr.ndim() != 1 {
+                return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                    "Generator.choice() with an 'a' of ndim != 1 is not implemented; only int or 1-D 'a' is scoped in",
+                ));
+            }
+            let ps = arr.shape()[0] as i64;
+            if ps == 0 && total_size != 0 {
+                return Err(PyValueError::new_err("a cannot be empty unless no samples are taken"));
+            }
+            (ps, false, Some(arr))
+        };
+
+        let p_vec: Option<Vec<f64>> = match p {
+            None => None,
+            Some(obj) if obj.is_none() => None,
+            Some(obj) => Some(
+                obj.extract::<Vec<f64>>()
+                    .map_err(|_| PyTypeError::new_err("p must be a 1-dimensional sequence of floats"))?,
+            ),
+        };
+        if let Some(ref pv) = p_vec {
+            if pv.len() as i64 != pop_size {
+                return Err(PyValueError::new_err("a and p must have same size"));
+            }
+            let atol = f64::EPSILON.sqrt();
+            // `kahan_sum` (`_common.pyx`): `sum = darr[0]; c = 0.0; for i in
+            // 1..n: y = darr[i]-c; t = sum+y; c = (t-sum)-y; sum = t` --
+            // over ALL `d` entries (unlike `multinomial`'s truncated sum
+            // above), returning `0.0` for `d == 0`.
+            let mut sum = pv.first().copied().unwrap_or(0.0);
+            let mut c = 0.0f64;
+            for &x in pv.iter().skip(1) {
+                let y = x - c;
+                let t = sum + y;
+                c = (t - sum) - y;
+                sum = t;
+            }
+            let p_sum = sum;
+            if p_sum.is_nan() {
+                return Err(PyValueError::new_err("Probabilities contain NaN"));
+            }
+            if pv.iter().any(|&x| x < 0.0) {
+                return Err(PyValueError::new_err("Probabilities are not non-negative"));
+            }
+            if (p_sum - 1.0).abs() > atol {
+                return Err(PyValueError::new_err(
+                    "Probabilities do not sum to 1. See Notes section of docstring for more information.",
+                ));
+            }
+        }
+
+        let n_draws: usize = if is_scalar { 1 } else { total_size as usize };
+        let idx: Vec<i64> = if replace {
+            match &p_vec {
+                Some(pv) => {
+                    // Plain (non-Kahan) running cumsum, matching numpy's
+                    // own `p.cumsum()` -- only the initial validation sum
+                    // above is Kahan-compensated.
+                    let mut cdf: Vec<f64> = Vec::with_capacity(pv.len());
+                    let mut running = 0.0f64;
+                    for &x in pv {
+                        running += x;
+                        cdf.push(running);
+                    }
+                    let last = *cdf.last().unwrap_or(&1.0);
+                    for v in cdf.iter_mut() {
+                        *v /= last;
+                    }
+                    (0..n_draws)
+                        .map(|_| {
+                            let u = self.bg.next_f64();
+                            // `searchsorted(..., side='right')`: first index
+                            // where `cdf[i] > u`.
+                            cdf.partition_point(|&c| c <= u) as i64
+                        })
+                        .collect()
+                }
+                None => (0..n_draws)
+                    .map(|_| bounded::bounded_u64(&mut self.bg, 0, (pop_size - 1) as u64) as i64)
+                    .collect(),
+            }
+        } else {
+            if total_size > pop_size {
+                return Err(PyValueError::new_err(
+                    "Cannot take a larger sample than population when replace is False",
+                ));
+            }
+            if p_vec.is_some() {
+                return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                    "Generator.choice(replace=False, p=...) is not implemented; see the family doc comment above 'shuffle' for why this path is deliberately declined",
+                ));
+            }
+            discrete::choice_no_replace_no_p(&mut self.bg, pop_size, total_size, shuffle)
+        };
+
+        let idx_shape: Vec<usize> = if is_scalar { vec![] } else { out_shape.clone() };
+        let idx_arr = NdArray::from_buffer(Buffer::I64(idx.clone()), idx_shape, Order::C).map_err(to_py_err)?;
+
+        if a_is_int {
+            if is_scalar {
+                // numpy: "When passing a as an integer type and size is not
+                // specified, the return type is a native Python int" --
+                // NOT a numpy scalar, unlike every other branch here.
+                return idx[0].into_py_any(py);
+            }
+            return Py::new(py, PyArray { inner: idx_arr })?.into_py_any(py);
+        }
+
+        let arr = a_arr.expect("a_arr is Some whenever a_is_int is false");
+        let ax = manip::normalize_axis(axis, arr.ndim()).map_err(to_py_err)?;
+        let taken = manip::take(&arr, &idx_arr, Some(ax), manip::ClipMode::Raise).map_err(to_py_err)?;
+        if is_scalar {
+            return crate::numpy_scalar_from_0d(py, &taken);
+        }
+        Py::new(py, PyArray { inner: taken })?.into_py_any(py)
+    }
 }
 
 #[pyfunction]
@@ -1075,6 +1664,7 @@ pub fn register(py: Python<'_>, parent: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySeedSequence>()?;
     m.add_class::<PyPCG64>()?;
     m.add_class::<PyPCG64DXSM>()?;
+    m.add_class::<PySFC64>()?;
     m.add_class::<PyGenerator>()?;
     m.add_function(wrap_pyfunction!(default_rng, &m)?)?;
     parent.add_submodule(&m)?;

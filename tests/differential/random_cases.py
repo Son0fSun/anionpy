@@ -168,6 +168,9 @@ def _generator_np(seed, op, opargs=(), opkwargs=None):
     if op == "ctor_random":
         g = np.random.Generator(np.random.PCG64(seed))
         return _as_comparable(g.random(*opargs, **opkwargs))
+    if op == "ctor_random_sfc64":
+        g = np.random.Generator(np.random.SFC64(seed))
+        return _as_comparable(g.random(*opargs, **opkwargs))
     g = np.random.default_rng(seed)
     return _as_comparable(getattr(g, op)(*opargs, **opkwargs))
 
@@ -178,6 +181,9 @@ def _generator_ionp(seed, op, opargs=(), opkwargs=None):
     opkwargs = opkwargs or {}
     if op == "ctor_random":
         g = anionpy.random.Generator(anionpy.random.PCG64(seed))
+        return _as_comparable(g.random(*opargs, **opkwargs))
+    if op == "ctor_random_sfc64":
+        g = anionpy.random.Generator(anionpy.random.SFC64(seed))
         return _as_comparable(g.random(*opargs, **opkwargs))
     g = anionpy.random.default_rng(seed)
     return _as_comparable(getattr(g, op)(*opargs, **opkwargs))
@@ -211,6 +217,13 @@ def generator_cases():
         # Generator(PCG64(seed)) constructor form
         ("ctor_pcg64_seed42_n5", (42, "ctor_random"), {"opargs": (5,), "opkwargs": {}}),
         ("ctor_pcg64_seed0_n3", (0, "ctor_random"), {"opargs": (3,), "opkwargs": {}}),
+        # Generator(SFC64(seed)) constructor form (2026-08-13, this session:
+        # SFC64 newly wired) -- a distinct BitGenerator plugged into the
+        # SAME Generator class, so this exercises Generator's dispatch
+        # picking the right BitGenKind variant, not just SFC64 in isolation.
+        ("ctor_sfc64_seed42_n5", (42, "ctor_random_sfc64"), {"opargs": (5,), "opkwargs": {}}),
+        ("ctor_sfc64_seed0_n3", (0, "ctor_random_sfc64"), {"opargs": (3,), "opkwargs": {}}),
+        ("ctor_sfc64_seed_large_n7", (2 ** 64 + 12345, "ctor_random_sfc64"), {"opargs": (7,), "opkwargs": {}}),
         # -----------------------------------------------------------------
         # Continuous distributions layered on `ionp_core::random::
         # distributions` (2026-08-02 addition). Each has a bit-exact happy
@@ -431,6 +444,18 @@ def pcg64_random_raw_cases():
         ("n4_seed42", (42,), {"size": 4}),
         ("n1_seed0", (0,), {"size": 1}),
         ("scalar_seed7", (7,), {}),
+        # A seed needing 5+ uint32 entropy words (2**130+7 -> [7,0,0,0,4]
+        # via numpy's own _int_to_uint32_array), i.e. MORE than
+        # SeedSequence's default pool_size=4. Added 2026-08-13 (this
+        # session) as a permanent regression guard: this is the seed width
+        # that exposed a real mix_entropy bug (hashmix hoisted outside its
+        # inner loop -- see ionp-core/src/random/seed_sequence.rs), found
+        # via the NEW random.SFC64 corpus's own provenance-varied seeds,
+        # not via this file. PCG64/PCG64DXSM shared the same buggy
+        # SeedSequence code path and were silently wrong at this width too
+        # (confirmed directly against real numpy before this case existed)
+        # -- this case is RED before the seed_sequence.rs fix, GREEN after.
+        ("n3_seed_gt_2_128", (2 ** 130 + 7,), {"size": 3}),
         # error paths
         ("negative_seed", (-2,), {}),
         ("float_seed", (1.5,), {}),
@@ -454,6 +479,45 @@ def pcg64dxsm_random_raw_cases():
         ("n4_seed42", (42,), {"size": 4}),
         ("n1_seed0", (0,), {"size": 1}),
         ("scalar_seed7", (7,), {}),
+        # Same mix_entropy-beyond-pool regression guard as PCG64's own
+        # corpus above -- see that case's comment.
+        ("n3_seed_gt_2_128", (2 ** 130 + 7,), {"size": 3}),
+    ]
+
+
+def _sfc64_random_raw_np(seed, size=None):
+    kwargs = {} if size is None else {"size": size}
+    return _as_comparable(np.random.SFC64(seed).random_raw(**kwargs))
+
+
+def _sfc64_random_raw_ionp(seed, size=None):
+    import anionpy
+
+    kwargs = {} if size is None else {"size": size}
+    return _as_comparable(anionpy.random.SFC64(seed).random_raw(**kwargs))
+
+
+def sfc64_random_raw_cases():
+    return [
+        # Provenance-varied seeds (not just kwargs): small int, zero,
+        # a seed exceeding 2**64 (SeedSequence's arbitrary-precision
+        # entropy pool, same class of case PCG64's own corpus above and
+        # the out-of-corpus probe for Generator methods already used),
+        # and a seed exceeding 2**128 to check int_to_uint32_words'
+        # splitting isn't silently width-capped for this bit generator's
+        # own seed path specifically (shared code with PCG64, but SFC64's
+        # OWN wiring -- sfc64_from_seed -- is what is under test here).
+        ("n4_seed42", (42,), {"size": 4}),
+        ("n1_seed0", (0,), {"size": 1}),
+        ("scalar_seed7", (7,), {}),
+        ("n5_seed_gt_2_64", (2 ** 64 + 999,), {}),
+        ("n6_seed_gt_2_128", (2 ** 130 + 7,), {}),
+        ("shape_2x3_seed99", (99,), {"size": (2, 3)}),
+        ("shape_0_seed1", (1,), {"size": 0}),
+        ("shape_3x0x2_seed5", (5,), {"size": (3, 0, 2)}),
+        # error paths
+        ("negative_seed", (-2,), {}),
+        ("float_seed", (1.5,), {}),
     ]
 
 
@@ -486,6 +550,12 @@ RANDOM_SPECS: dict[str, ItemSpec] = {
         name="random.PCG64DXSM", kind="custom",
         custom_cases=pcg64dxsm_random_raw_cases,
         numpy_adapter=_pcg64dxsm_random_raw_np, ionp_adapter=_pcg64dxsm_random_raw_ionp,
+        atol=0.0, rtol=0.0,
+    ),
+    "random.SFC64": ItemSpec(
+        name="random.SFC64", kind="custom",
+        custom_cases=sfc64_random_raw_cases,
+        numpy_adapter=_sfc64_random_raw_np, ionp_adapter=_sfc64_random_raw_ionp,
         atol=0.0, rtol=0.0,
     ),
 }
