@@ -83,6 +83,39 @@ fn shuffle_buffer_masked(bg: &mut dyn BitGen64, buf: &mut Buffer) {
     }
 }
 
+/// Independently Fisher-Yates each contiguous last-axis fiber of length `n_last`.
+/// Caller must put the target axis last and give a C-contiguous unique buffer.
+fn shuffle_last_axis_fibers(bg: &mut dyn BitGen64, buf: &mut Buffer, n_last: usize) {
+    if n_last == 0 {
+        return;
+    }
+    let total = buf.len();
+    debug_assert_eq!(total % n_last, 0);
+    let outer = total / n_last;
+    for o in 0..outer {
+        let lo = o * n_last;
+        let hi = lo + n_last;
+        match buf {
+            Buffer::Bool(v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::I8(v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::I16(v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::I32(v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::I64(v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::U8(v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::U16(v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::U32(v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::U64(v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::F16(v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::F32(v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::F64(v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::C64(v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::C128(v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::S(_, v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+            Buffer::U(_, v) => discrete::shuffle_masked(bg, &mut v[lo..hi]),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Seed / entropy coercion.
 // ---------------------------------------------------------------------------
@@ -1469,26 +1502,31 @@ impl PyGenerator {
         axis: Option<isize>,
         out: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
-        if axis.is_some() {
-            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-                "Generator.permuted(axis=...) is not implemented; only axis=None (flatten + shuffle + reshape) is scoped in",
-            ));
-        }
         if out.is_some() {
             return Err(pyo3::exceptions::PyNotImplementedError::new_err(
                 "Generator.permuted(out=...) is not implemented",
             ));
         }
         let arr = extract_or_ingest_ndarray(x)?;
-        // Fresh, uniquely-owned C-contiguous buffer (same `gather_by_perm`
-        // guarantee `permutation` relies on above) with `arr`'s ORIGINAL
-        // shape preserved -- shuffling this buffer's raw storage in place
-        // is exactly "flatten, shuffle the flat sequence, reshape back",
-        // since the flat storage IS the flattened sequence and the shape
-        // metadata is untouched.
-        let mut flat = arr.to_contiguous_order("C").map_err(to_py_err)?;
-        shuffle_buffer_masked(&mut self.bg, flat.buffer_mut());
-        Py::new(py, PyArray { inner: flat })?.into_py_any(py)
+        if axis.is_none() {
+            let mut flat = arr.to_contiguous_order("C").map_err(to_py_err)?;
+            shuffle_buffer_masked(&mut self.bg, flat.buffer_mut());
+            return Py::new(py, PyArray { inner: flat })?.into_py_any(py);
+        }
+        let ax = manip::normalize_axis(axis.unwrap(), arr.ndim().max(1)).map_err(to_py_err)?;
+        let mut work = arr.to_contiguous_order("C").map_err(to_py_err)?;
+        let last = work.ndim().saturating_sub(1);
+        if ax != last {
+            work = ionp_core::creation::moveaxis(&work, &[ax], &[last]).map_err(to_py_err)?;
+            work = work.to_contiguous_order("C").map_err(to_py_err)?;
+        }
+        let n_last = *work.shape().last().unwrap_or(&1);
+        shuffle_last_axis_fibers(&mut self.bg, work.buffer_mut(), n_last);
+        if ax != last {
+            work = ionp_core::creation::moveaxis(&work, &[last], &[ax]).map_err(to_py_err)?;
+            work = work.to_contiguous_order("C").map_err(to_py_err)?;
+        }
+        Py::new(py, PyArray { inner: work })?.into_py_any(py)
     }
 
     /// `Generator.choice(a, size=None, replace=True, p=None, axis=0,
@@ -1539,12 +1577,8 @@ impl PyGenerator {
             (v, true, None)
         } else {
             let arr = extract_or_ingest_ndarray(a)?;
-            if arr.ndim() != 1 {
-                return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-                    "Generator.choice() with an 'a' of ndim != 1 is not implemented; only int or 1-D 'a' is scoped in",
-                ));
-            }
-            let ps = arr.shape()[0] as i64;
+            let ax_pre = manip::normalize_axis(axis, arr.ndim().max(1)).map_err(to_py_err)?;
+            let ps = arr.shape()[ax_pre] as i64;
             if ps == 0 && total_size != 0 {
                 return Err(PyValueError::new_err("a cannot be empty unless no samples are taken"));
             }

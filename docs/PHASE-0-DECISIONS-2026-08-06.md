@@ -1,3 +1,1 @@
-# Phase 0 decisions (public record)
-
-Research crates are not in this repository. History starts here.
+# Phase 0 decisions (public record)\n\nThe public name is anionpy. Research crates are omitted. History starts here.\n
